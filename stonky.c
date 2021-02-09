@@ -34,6 +34,7 @@
 #include <pthread.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <math.h>
 
 #include <curl/curl.h>
 #include <sqlite3.h>
@@ -829,6 +830,75 @@ int checkYahooTimeSeriesValidity(ydata *yd, int maxperc) {
     return (nulls > yd->ts_len/maxperc) ? C_ERR : C_OK;
 }
 
+/* Structure used by computeMonteCarlo() to return the results. */
+typedef struct {
+    double gain;    /* Average gain. */
+    double mingain, maxgain;    /* Minimum and maximum gains. */
+    double absdiff; /* Average of absolute difference of gains. */
+    double avgper;  /* Average period of buy/sell action, in days. */
+} mcres;
+
+/* Perform a Montecarlo simulation where the stock is bought and sold
+ * at random days within the specified 'range' interval. Return data
+ * as specified in the mcres structure. */
+void computeMontecarlo(ydata *yd, int range, int count, mcres *mc) {
+    int buyday, sellday;
+    double total_gain = 0;
+    double total_interval = 0;
+    float *data = yd->ts_data;
+
+    if (range > yd->ts_len) range = yd->ts_len;
+    else if (range < yd->ts_len) data += yd->ts_len-range;
+    double *gains = xmalloc(sizeof(double)*count);
+
+    for (int j = 0; j < count; j++) {
+        /* We want to pick two different days, and since the API sometimes
+         * return data with fields set to zero, also make sure that
+         * we pick non-zero days. */
+        do {
+            buyday = rand() % range;
+        } while (data[buyday] == 0);
+        do {
+            sellday = rand() % range;
+        } while(sellday == buyday || data[sellday] == 0);
+
+        if (buyday > sellday) {
+            int t = buyday;
+            buyday = sellday;
+            sellday = t;
+        }
+
+        double buy_price = data[buyday];
+        double sell_price = data[sellday];
+        double gain = (sell_price-buy_price)/buy_price*100;
+        gains[j] = gain;
+        if (debugMode) {
+            printf("buy (%d) %f sell (%d) %f: %f\n",
+                buyday, buy_price, sellday, sell_price, gain);
+        }
+        total_gain += gain;
+        total_interval += sellday-buyday;
+    }
+    mc->gain = total_gain / count;
+    mc->avgper = total_interval / count;
+
+    /* Scan the array of gains to calculate the average gain difference,
+     * as long as min/max values. */
+    mc->absdiff = 0;
+    for (int j = 0; j < count; j++) {
+        mc->absdiff += fabs(mc->gain - gains[j]);
+        if (j == 0) {
+            mc->mingain = gains[j];
+            mc->maxgain = gains[j];
+        } else {
+            if (gains[j] < mc->mingain) mc->mingain = gains[j];
+            if (gains[j] > mc->maxgain) mc->maxgain = gains[j];
+        }
+    }
+    mc->absdiff /= count;
+    xfree(gains);
+}
+
 /* Fetch 1y of data and performs a Montecarlo simulation where we buy
  * and sell at random moments, calculating the average gain (or loss). */
 void botHandleMontecarloRequest(botRequest *br, sds symbol) {
@@ -854,43 +924,17 @@ void botHandleMontecarloRequest(botRequest *br, sds symbol) {
 
     int count = 1000; /* Number of experiments to perform in the
                          Montecarlo simulation. */
-    int buyday, sellday;
-    double total_gain = 0;
-    double total_interval = 0;
-    for (int j = 0; j < count; j++) {
-        /* We want to pick two different days, and since the API sometimes
-         * return data with fields set to zero, also make sure that
-         * we pick non-zero days. */
-        do {
-            buyday = rand() % yd->ts_len;
-        } while (yd->ts_data[buyday] == 0);
-        do {
-            sellday = rand() % yd->ts_len;
-        } while(sellday == buyday || yd->ts_data[sellday] == 0);
 
-        if (buyday > sellday) {
-            int t = buyday;
-            buyday = sellday;
-            sellday = t;
-        }
-
-        double buy_price = yd->ts_data[buyday];
-        double sell_price = yd->ts_data[sellday];
-        double gain = (sell_price-buy_price)/buy_price;
-        if (debugMode) {
-            printf("buy (%d) %f sell (%d) %f: %f\n",
-                buyday, buy_price, sellday, sell_price, gain);
-        }
-        total_gain += gain;
-        total_interval += sellday-buyday;
-    }
-    total_gain /= count;
-
+    mcres mc;
+    computeMontecarlo(yd,365,count,&mc);
     reply = sdscatprintf(reply,
         "Buying and selling '%s' at random days during "
-        "the past year would result in %.2f%% average gain/loss. "
+        "the past year would result in:\n"
+        "Average gain/loss: %.2f%% (+/-%.2f%%).\n"
+        "Bets outcome : %.2f%%.\n"
+        "Worst outcome: %.2f%%.\n"
         "%d experiments with an average interval of %.2f days.",
-        symbol, total_gain*100, count, total_interval/count);
+        symbol, mc.gain, mc.absdiff, mc.maxgain, mc.mingain, count, mc.avgper);
 
 cleanup:
     if (reply) botSendMessage(br->target,reply,0);
