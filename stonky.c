@@ -26,6 +26,12 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+/* Adding these for portablity */
+#define _GNU_SOURCE
+#define _BSD_SOURCE
+/* modern glibc will complain about the above if it doesn't see this. */
+#define _DEFAULT_SOURCE
+
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -770,6 +776,7 @@ void botHandlePriceRequest(botRequest *br, sds symbol) {
 void botHandleChartRequest(botRequest *br, sds symbol, sds range) {
     /* Select the Yahoo chart API parameters according to the
      * requested interval. */
+    /* api_range and api_internal defaults to 1d and 5m respectively */
     char *api_range, *api_interval;
     if (!strcasecmp(range,"1d")) {
         api_range = "1d";
@@ -786,6 +793,9 @@ void botHandleChartRequest(botRequest *br, sds symbol, sds range) {
     } else if (!strcasecmp(range,"1y")) {
         api_range = "1y";
         api_interval = "5d";
+    } else {
+        api_range = "1d";
+        api_interval = "5m";
     }
 
     ydata *yd = getYahooData(YDATA_TS,symbol,api_range,api_interval);
