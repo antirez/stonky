@@ -25,6 +25,9 @@ administrator. All the Stonky commands start with the "$" character.
                        the 52 weeks price of the specified stock. You can
                        say "montecarlo" instead of "mc" if you want.
 
+Note: In order to query stocks listed on different exchanges use
+format `$SYMBOL.EXCHANGE`. For example `$IGL.NS`
+
 The bot supports the concept of "list of stocks", you can add stocks to
 a list, then query the list to have all the prices with a single message:
 
