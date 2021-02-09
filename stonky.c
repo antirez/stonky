@@ -775,6 +775,9 @@ void botHandlePriceRequest(botRequest *br, sds symbol) {
 
 /* Handle bot chart requests in the form: $AAPL 1d|5d|1m|6m|1y. */
 void botHandleChartRequest(botRequest *br, sds symbol, sds range) {
+    ydata *yd = NULL;
+    sds reply = sdsempty();
+
     /* Select the Yahoo chart API parameters according to the
      * requested interval. */
     /* api_range and api_internal defaults to 1d and 5m respectively */
@@ -795,12 +798,11 @@ void botHandleChartRequest(botRequest *br, sds symbol, sds range) {
         api_range = "1y";
         api_interval = "5d";
     } else {
-        api_range = "1d";
-        api_interval = "5m";
+        reply = sdscatprintf(reply,"Invalid chart range. Use 1d|5d|1m|6m|1y");
+        goto fmterr;
     }
 
-    ydata *yd = getYahooData(YDATA_TS,symbol,api_range,api_interval);
-    sds reply = sdsempty();
+    yd = getYahooData(YDATA_TS,symbol,api_range,api_interval);
     if (yd == NULL) {
         reply = sdscatprintf(reply,"Can't fetch chart data for '%s'",symbol);
     } else {
@@ -826,6 +828,8 @@ void botHandleChartRequest(botRequest *br, sds symbol, sds range) {
         reply = sdscat(reply,"```");
         sdsfree(graph);
     }
+
+fmterr:
     freeYahooData(yd);
     botSendMessage(br->target,reply,0);
     sdsfree(reply);
