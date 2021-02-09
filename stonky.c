@@ -27,10 +27,11 @@
  */
 
 /* Adding these for portablity */
-#define _GNU_SOURCE
 #define _BSD_SOURCE
-/* modern glibc will complain about the above if it doesn't see this. */
+#if defined(__linux__)
+#define _GNU_SOURCE
 #define _DEFAULT_SOURCE
+#endif
 
 #include <stdio.h>
 #include <string.h>
