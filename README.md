@@ -47,11 +47,14 @@ AAPL 1y | min 57.31 max 136.91
 $AAPL mc
 
 ```
-Buying and selling 'AAPL' at random days during the past year would result in 35.53% average gain/loss. 1000 experiments with an average interval of 83.76 days.
+Buying and selling 'AAPL' at random days during 
+the past year would result in 35.53% average gain/loss. 
+1000 experiments with an average interval of 83.76 days.
 ```
 
 $AAPL
 
 ```
-Apple Inc. (AAPL (https://google.com/search?q=AAPL+stock)) price is 136.91$ (+0.11%) | pre-market: 136.66$ (-0.18%)
+Apple Inc. (AAPL) price is 136.91$ (+0.11%) |
+pre-market: 136.66$ (-0.18%)
 ```
