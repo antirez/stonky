@@ -1073,6 +1073,7 @@ void botMain(void) {
  * the file, as a side effect the global SDS string BotApiKey is populated. */
 void readApiKeyFromFile(void) {
     FILE *fp = fopen("apikey.txt","r");
+    if (fp == NULL) return;
     char buf[1024];
     if (fgets(buf,sizeof(buf),fp) == NULL) {
         fclose(fp);
@@ -1106,7 +1107,7 @@ int main(int argc, char **argv) {
     if (BotApiKey == NULL) readApiKeyFromFile();
     if (BotApiKey == NULL) {
         printf("Provide a bot API key via --apikey or storing a file named "
-               "apikey.txt in the bot working directory.");
+               "apikey.txt in the bot working directory.\n");
         exit(1);
     }
     dbHandle = dbInit();
