@@ -1011,6 +1011,21 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
 #define OUTCOME_NEUTRAL 1
 #define OUTCOME_KO 2
 
+/* Get the class for a given time series of prices. */
+int fillNetGetClass(float *data, int ihours, int afterhours) {
+    double avgprice = 0;
+    for (int i = ihours; i < ihours+afterhours; i++)
+        avgprice += data[i];
+    avgprice /= afterhours;
+    double gain = (avgprice / data[ihours-1])-1;
+
+    int class;
+    if (gain > 0.005) class = OUTCOME_OK;
+    else if (gain < -0.005) class = OUTCOME_KO;
+    else class = OUTCOME_NEUTRAL;
+    return class;
+}
+
 /* Populate the training arrays. */
 void fillNetData(float **inputs, float **outputs, int setlen, float *data, int ihours, int afterhours) {
     int numclasses = 3;
@@ -1035,15 +1050,7 @@ void fillNetData(float **inputs, float **outputs, int setlen, float *data, int i
             inputs[j][i] = (data[j+i]-min) / normfactor;
 
         /* Predict class. */
-        double avgprice = 0;
-        for (int i = ihours; i < ihours+afterhours; i++)
-            avgprice += data[j+i];
-        avgprice /= afterhours;
-        double gain = (avgprice / data[j+ihours-1])-1;
-        int class;
-        if (gain > 0.005) class = OUTCOME_OK;
-        else if (gain < -0.005) class = OUTCOME_KO;
-        else class = OUTCOME_NEUTRAL;
+        int class = fillNetGetClass(data+j,ihours,afterhours);
         classhits[class]++;
 
         /* Set the output class. */
@@ -1053,7 +1060,7 @@ void fillNetData(float **inputs, float **outputs, int setlen, float *data, int i
         outputs[j][2] = 0;
         outputs[j][class] = 1;
 
-#if 1
+#if 0
         for (int k = 0; k < ihours; k++) printf("%f,",inputs[j][k]);
         printf(" = ");
         printf("%f (gain %f | class %f %f %f),",
@@ -1103,8 +1110,6 @@ void botHandleNeuralNetworkRequest(botRequest *br, sds symbol) {
 
     kad_node_t *t;
     kann_t *ann;
-    float dropout = 0.2;
-    int n_h_fc = 128, n_h_flt = 32;
 
     /* Create the neural network. */
     t = kann_layer_input(ihours);
