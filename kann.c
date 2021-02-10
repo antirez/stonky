@@ -860,11 +860,13 @@ int kann_train_fnn1(kann_t *ann, float lr, int mini_size, int max_epoch, int max
 	shuf = (int*)malloc(n * sizeof(int));
 	x = (float**)malloc(n * sizeof(float*));
 	y = (float**)malloc(n * sizeof(float*));
-	kann_shuffle(n, shuf);
-	for (j = 0; j < n; ++j)
-		x[j] = _x[shuf[j]], y[j] = _y[shuf[j]];
 	n_val = (int)(n * frac_val);
 	n_train = n - n_val;
+	kann_shuffle(n_train,shuf); /* Modified. */
+	for (j = 0; j < n_train; ++j)
+		x[j] = _x[shuf[j]], y[j] = _y[shuf[j]];
+	for (j = n_train; j < n; ++j)
+		x[j] = _x[j], y[j] = _y[j];
 	min_x = (float*)malloc(n_var * sizeof(float));
 	min_c = (float*)malloc(n_const * sizeof(float));
 
@@ -908,7 +910,7 @@ int kann_train_fnn1(kann_t *ann, float lr, int mini_size, int max_epoch, int max
 		}
 		if (n_val > 0) val_cost /= n_val;
 		if (kann_verbose >= 3) {
-			fprintf(stderr, "epoch: %d; training cost: %g", i+1, train_cost);
+			fprintf(stderr, "epoch: %d; training cost: %g; drops: %d", i+1, train_cost, drop_streak);
 			if (n_train_base) fprintf(stderr, " (class error: %.2f%%)", 100.0f * n_train_err / n_train);
 			if (n_val > 0) {
 				fprintf(stderr, "; validation cost: %g", val_cost);

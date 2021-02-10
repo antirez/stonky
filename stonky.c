@@ -1026,28 +1026,31 @@ int fillNetGetClass(float *data, int ihours, int afterhours) {
     return class;
 }
 
+/* Normalize the first 'ihours' samples of 'data' in the range from 0 to 1. */
+void fillNetNormalize(float *data, int ihours) {
+    float min = data[0];
+    float max = data[0];
+    for (int i = 0; i < ihours; i++) {
+        float aux = data[i];
+        if (aux > max) max = aux;
+        if (aux < min) min = aux;
+    }
+    double norm = max-min;
+    for (int i = 0; i < ihours; i++)
+        data[i] = (data[i]-min) / norm;
+}
+
 /* Populate the training arrays. */
 void fillNetData(float **inputs, float **outputs, int setlen, float *data, int ihours, int afterhours) {
     int numclasses = 3;
     int classhits[3] = {0};
 
     for (int j = 0; j < setlen; j++) {
-        /* Compute the normalization factor so that prices will fluctuate
-         * from 0 to 1. */
-        float normfactor;
-        float min = data[j];
-        float max = data[j];
-        for (int i = 0; i < ihours; i++) {
-            float aux = data[j+i];
-            if (aux > max) max = aux;
-            if (aux < min) min = aux;
-        }
-        normfactor = max-min;
-
         /* Fill this input with normalized data. */
         inputs[j] = xmalloc(sizeof(float)*ihours);
         for (int i = 0; i < ihours; i++)
-            inputs[j][i] = (data[j+i]-min) / normfactor;
+            inputs[j][i] = data[j+i];
+        fillNetNormalize(inputs[j],ihours);
 
         /* Predict class. */
         int class = fillNetGetClass(data+j,ihours,afterhours);
@@ -1086,7 +1089,7 @@ void botHandleNeuralNetworkRequest(botRequest *br, sds symbol) {
     float **outputs = NULL;
 
     /* Fetch the data. Sometimes we'll not obtain enough data points. */
-    ydata *yd = getYahooData(YDATA_TS,symbol,"2y","1h");
+    ydata *yd = getYahooData(YDATA_TS,symbol,"7d","1m");
     if (debugMode) printf("Training the net with %d samples\n",yd->ts_len);
     if (yd == NULL || yd->ts_len < 1000) {
         reply = sdscatprintf(reply,"Missing historical data for '%s'",
@@ -1119,7 +1122,8 @@ void botHandleNeuralNetworkRequest(botRequest *br, sds symbol) {
     ann = kann_new(t, 0);
 
     /* Create the training and testing datasets. */
-    int setlen = yd->ts_len-ihours-afterhours;
+    int verlen = 200; /* Verify the final net using this 200 hours of data. */
+    int setlen = yd->ts_len-ihours-afterhours-verlen;
     inputs = xmalloc(setlen*sizeof(float*));
     outputs = xmalloc(setlen*sizeof(float*));
     fillNetData(inputs,outputs,setlen,yd->ts_data,ihours,afterhours);
@@ -1150,18 +1154,35 @@ void botHandleNeuralNetworkRequest(botRequest *br, sds symbol) {
     }
     normfactor = max-min;
 
+    /* Verify the network training with never seen data. */
     float *x = xmalloc(sizeof(float)*ihours);
     const float *y;
-    for (int j = 0; j < ihours; j++) {
-        x[j] = (yd->ts_data[yd->ts_len-1-ihours+j]-min) / normfactor;
-        printf("I %f\n", x[j]);
-    }
-    y = kann_apply1(ann,x);
+    float *data = yd->ts_data+setlen;
+    int ok_output = 0, err_output = 0;
+    for (int j = 0; j < verlen; j++) {
+        for (int i = 0; i < ihours; i++)
+            x[i] = data[i];
+        fillNetNormalize(x,ihours);
+        y = kann_apply1(ann,x);
 
-    /* Build the reply. */
-    printf("OK %f\n", y[0]);
-    printf("NE %f\n", y[1]);
-    printf("KO %f\n", y[2]);
+        int expected = fillNetGetClass(data,ihours,afterhours);
+        int maxidx = 0;
+        float maxval = y[0];
+        for (int k = 0; k < numclasses; k++) {
+            if (y[k] > maxval) {
+                maxidx = k;
+                maxval = y[k];
+            }
+        }
+        printf("Expected class %d. Got class %d\n", expected, maxidx);
+        if (expected == maxidx)
+            ok_output++;
+        else
+            err_output++;
+        data++;
+    }
+    printf("OK: %d, ERR: %d\n", ok_output, err_output);
+    xfree(x);
     kann_delete(ann);
 
 cleanup:
