@@ -48,6 +48,7 @@
 #include "sds.h"
 #include "cJSON.h"
 #include "canvas.h"
+#include "kann.h"
 
 #define C_OK 1
 #define C_ERR 0
@@ -1006,6 +1007,166 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
     sdsfree(listname);
 }
 
+#define OUTCOME_OK 0
+#define OUTCOME_NEUTRAL 1
+#define OUTCOME_KO 2
+
+/* Populate the training arrays. */
+void fillNetData(float **inputs, float **outputs, int setlen, float *data, int ihours, int afterhours) {
+    int numclasses = 3;
+    int classhits[3] = {0};
+
+    for (int j = 0; j < setlen; j++) {
+        /* Compute the normalization factor so that prices will fluctuate
+         * from 0 to 1. */
+        float normfactor;
+        float min = data[j];
+        float max = data[j];
+        for (int i = 0; i < ihours; i++) {
+            float aux = data[j+i];
+            if (aux > max) max = aux;
+            if (aux < min) min = aux;
+        }
+        normfactor = max-min;
+
+        /* Fill this input with normalized data. */
+        inputs[j] = xmalloc(sizeof(float)*ihours);
+        for (int i = 0; i < ihours; i++)
+            inputs[j][i] = (data[j+i]-min) / normfactor;
+
+        /* Predict class. */
+        double avgprice = 0;
+        for (int i = ihours; i < ihours+afterhours; i++)
+            avgprice += data[j+i];
+        avgprice /= afterhours;
+        double gain = (avgprice / data[j+ihours-1])-1;
+        int class;
+        if (gain > 0.005) class = OUTCOME_OK;
+        else if (gain < -0.005) class = OUTCOME_KO;
+        else class = OUTCOME_NEUTRAL;
+        classhits[class]++;
+
+        /* Set the output class. */
+        outputs[j] = xmalloc(sizeof(float)*numclasses);
+        outputs[j][0] = 0;
+        outputs[j][1] = 0;
+        outputs[j][2] = 0;
+        outputs[j][class] = 1;
+
+#if 1
+        for (int k = 0; k < ihours; k++) printf("%f,",inputs[j][k]);
+        printf(" = ");
+        printf("%f (gain %f | class %f %f %f),",
+            avgprice,gain,
+            outputs[j][0],outputs[j][1],outputs[j][2]);
+        printf("\n");
+#endif
+    }
+    printf("Trained with class hits %d %d %d\n", classhits[0],
+           classhits[1], classhits[2]);
+    int maxclass = classhits[0];
+    if (classhits[1] > maxclass) maxclass = classhits[1];
+    if (classhits[2] > maxclass) maxclass = classhits[2];
+    printf("Base error: %f\n",
+        (1-((double)maxclass/(classhits[0]+classhits[1]+classhits[2])))*100);
+}
+
+/* Neural network request: train a neural network to predict a given
+ * stock price class in the next hours (ok, ko, neutral). */
+void botHandleNeuralNetworkRequest(botRequest *br, sds symbol) {
+    sds reply = sdsempty();
+    float **inputs = NULL;
+    float **outputs = NULL;
+
+    /* Fetch the data. Sometimes we'll not obtain enough data points. */
+    ydata *yd = getYahooData(YDATA_TS,symbol,"2y","1h");
+    if (debugMode) printf("Training the net with %d samples\n",yd->ts_len);
+    if (yd == NULL || yd->ts_len < 1000) {
+        reply = sdscatprintf(reply,"Missing historical data for '%s'",
+                             symbol);
+        goto cleanup;
+    }
+
+    /* For neural network training, we don't tolerate more than 1%
+     * of zero samples. */
+    if (checkYahooTimeSeriesValidity(yd,1) == C_ERR) {
+        reply = sdscatprintf(reply,"Too many zero samples for '%s'",
+                             symbol);
+        goto cleanup;
+    }
+
+    /* Create a neural network that takes N hours as input, and emits
+     * the outcome of the average next hours price (ok, neutral, ko). */
+    int ihours = 7*10;    /* Get as input the previous "ihours" hours. */
+    int afterhours = 7*2; /* Predict average price of the next "afterhours". */
+    int numclasses = 3;   /* Three prediction classes. */
+
+    kad_node_t *t;
+    kann_t *ann;
+    float dropout = 0.2;
+    int n_h_fc = 128, n_h_flt = 32;
+
+    /* Create the neural network. */
+    t = kann_layer_input(ihours);
+    t = kad_relu(kann_layer_dense(t, 1000));
+    t = kad_relu(kann_layer_dense(t, 500));
+    t = kann_layer_cost(t, numclasses, KANN_C_CEM);
+    ann = kann_new(t, 0);
+
+    /* Create the training and testing datasets. */
+    int setlen = yd->ts_len-ihours-afterhours;
+    inputs = xmalloc(setlen*sizeof(float*));
+    outputs = xmalloc(setlen*sizeof(float*));
+    fillNetData(inputs,outputs,setlen,yd->ts_data,ihours,afterhours);
+
+    /* Perform the training. */
+    int mini_size = 64;
+    int max_epoch = 100;
+    int max_drop_streak = 20;
+    float lr = 0.001, frac_val = 0.1;
+
+    // kann_mt(ann, n_threads, mini_size); /* To use threads. */
+    kann_train_fnn1(ann, lr, mini_size, max_epoch, max_drop_streak, frac_val,
+                    setlen, inputs, outputs);
+
+    for (int j = 0; j < setlen; j++) {
+        xfree(inputs[j]);
+        xfree(outputs[j]);
+    }
+
+    /* Execute the net to predict the next days price. */
+    float normfactor;
+    float min = yd->ts_data[yd->ts_len-1-ihours];
+    float max = yd->ts_data[yd->ts_len-1-ihours];
+    for (int j = 0; j < ihours; j++) {
+        float aux = yd->ts_data[yd->ts_len-1-ihours+j];
+        if (aux > max) max = aux;
+        if (aux < min) min = aux;
+    }
+    normfactor = max-min;
+
+    float *x = xmalloc(sizeof(float)*ihours);
+    const float *y;
+    for (int j = 0; j < ihours; j++) {
+        x[j] = (yd->ts_data[yd->ts_len-1-ihours+j]-min) / normfactor;
+        printf("I %f\n", x[j]);
+    }
+    y = kann_apply1(ann,x);
+
+    /* Build the reply. */
+    printf("OK %f\n", y[0]);
+    printf("NE %f\n", y[1]);
+    printf("KO %f\n", y[2]);
+    kann_delete(ann);
+
+cleanup:
+    xfree(inputs);
+    xfree(outputs);
+    if (reply) botSendMessage(br->target,reply,0);
+    freeYahooData(yd);
+    sdsfree(reply);
+}
+
 /* Request handling thread entry point. */
 void *botHandleRequest(void *arg) {
     botRequest *br = arg;
@@ -1030,6 +1191,9 @@ void *botHandleRequest(void *arg) {
     {
         /* $AAPL mc | montecarlo */
         botHandleMontecarloRequest(br,argv[0]);
+    } else if (argc == 2 && (!strcasecmp(argv[1],"nn"))) {
+        /* $AAPL nn */
+        botHandleNeuralNetworkRequest(br,argv[0]);
     } else {
         botSendMessage(br->target,
             "Sorry, I can't understand your request. Try $HELP.",0);
