@@ -58,8 +58,8 @@
 #define STONKY_SHORT (1<<0)     /* Use short form for some output. */
 
 int debugMode = 0; /* If true enables debugging info (--debug option). */
-char *dbFile = "/tmp/stonky.sqlite"; /* Change with --dbfile. */
-sqlite3 *dbHandle;
+char *dbFile = "/tmp/stonky.sqlite";    /* Change with --dbfile. */
+_Thread_local sqlite3 *dbHandle = NULL; /* Per-thread sqlite handle. */
 sds BotApiKey = NULL;
 
 /* ============================================================================
@@ -568,8 +568,9 @@ botRequest *createBotRequest(void) {
  * Database abstraction
  * ===========================================================================*/
 
-/* Create the SQLite tables if needed. Return NULL on error. */
-sqlite3 *dbInit(void) {
+/* Create the SQLite tables if needed (if createdb is true), and return
+ * the SQLite database handle. Return NULL on error. */
+sqlite3 *dbInit(int createdb) {
     sqlite3 *db;
     int rt = sqlite3_open(dbFile, &db);
     if (rt != SQLITE_OK) {
@@ -578,18 +579,20 @@ sqlite3 *dbInit(void) {
         return NULL;
     }
 
-    char *sql =
-    "DROP TABLE IF EXISTS Cars;"
-    "CREATE TABLE IF NOT EXISTS Lists(Name TEXT);"
-    "CREATE TABLE IF NOT EXISTS ListStock(listid INT, Symbol TEXT);";
+    if (createdb) {
+        char *sql =
+        "DROP TABLE IF EXISTS Cars;"
+        "CREATE TABLE IF NOT EXISTS Lists(Name TEXT);"
+        "CREATE TABLE IF NOT EXISTS ListStock(listid INT, Symbol TEXT);";
 
-    char *errmsg;
-    int rc = sqlite3_exec(db, sql, 0, 0, &errmsg);
-    if (rc != SQLITE_OK) {
-        fprintf(stderr, "SQL error [%d]: %s\n", rc, errmsg);
-        sqlite3_free(errmsg);
-        sqlite3_close(db);
-        return NULL;
+        char *errmsg;
+        int rc = sqlite3_exec(db, sql, 0, 0, &errmsg);
+        if (rc != SQLITE_OK) {
+            fprintf(stderr, "SQL error [%d]: %s\n", rc, errmsg);
+            sqlite3_free(errmsg);
+            sqlite3_close(db);
+            return NULL;
+        }
     }
     return db;
 }
@@ -1036,6 +1039,7 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
 
 /* Request handling thread entry point. */
 void *botHandleRequest(void *arg) {
+    dbHandle = dbInit(0);
     botRequest *br = arg;
 
     /* Parse the request as a command composed of arguments. */
@@ -1198,7 +1202,7 @@ int main(int argc, char **argv) {
                "apikey.txt in the bot working directory.\n");
         exit(1);
     }
-    dbHandle = dbInit();
+    dbHandle = dbInit(1);
     if (dbHandle == NULL) exit(1);
     cJSON_Hooks jh = {.malloc_fn = xmalloc, .free_fn = xfree};
     cJSON_InitHooks(&jh);
