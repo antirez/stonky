@@ -1023,7 +1023,7 @@ void botHandleMontecarloRequest(botRequest *br, sds symbol, sds *argv, int argc)
     mcres mc;
     computeMontecarlo(yd,range,count,period,&mc);
     reply = sdscatprintf(reply,
-        "Random Buying/selling '%s' simulation report:\n"
+        "Random buying/selling '%s' simulation report:\n"
         "Average gain/loss: %.2f%% (+/-%.2f%%).\n"
         "Best outcome : %.2f%%.\n"
         "Worst outcome: %.2f%%.\n"
