@@ -402,11 +402,23 @@ ydata *getYahooData(int type, const char *symbol, const char *range, const char 
         return NULL;
     }
 
-    /* Get data via a blocking HTTP request. */
-    int res;
-    sds body = makeHttpCall(url,&res);
+    /* Get data via a blocking HTTP request. We try to perform more than
+     * a single query since sometimes the Yahoo API will return a 500
+     * error without any reason, but will work again immediately after. */
+    int attempt = 0, maxattempts = 5;
+    int res = C_ERR;
+    sds body = NULL;
+    while(attempt < maxattempts && res == C_ERR) {
+        if (attempt > 0) usleep(100000);
+        sdsfree(body);
+        body = makeHttpCall(url,&res);
+        attempt++;
+    }
     sdsfree(url);
-    if (res != C_OK) return NULL;
+    if (res != C_OK) {
+        sdsfree(body);
+        return NULL;
+    }
 
     /* Setup the empty object. */
     ydata *yd = malloc(sizeof(*yd));
