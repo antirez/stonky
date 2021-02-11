@@ -939,6 +939,10 @@ void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
         double buy_price = data[buyday];
         double sell_price = data[sellday];
         double gain = (sell_price-buy_price)/buy_price*100;
+        printf("buy[%d]=%f sell[%d]=%f gain=%f\n",
+            buyday,buy_price,
+            sellday,sell_price,
+            gain);
         gains[j] = gain;
         if (debugMode) {
             printf("buy (%d) %f sell (%d) %f: %f\n",
@@ -972,19 +976,33 @@ void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
 void botHandleMontecarloRequest(botRequest *br, sds symbol, sds *argv, int argc) {
     sds reply = sdsempty();
     int period = 0;
+    int range = 365;
+    ydata *yd = NULL;
 
     /* Parse arguments. */
     for (int j = 0; j < argc; j++) {
         int moreargs = argc-j-1;
-        if (!strcasecmp(argv[j],"period") && moreargs)
+        if (!strcasecmp(argv[j],"period") && moreargs) {
             period = atoi(argv[++j]);
-        /* Ignore bad format. */
+            if (period <= 0) period = 1;
+        } else if (!strcasecmp(argv[j],"range") && moreargs) {
+            range = atoi(argv[++j]);
+            if (range <= 0) range = 1;
+        } else if (!strcasecmp(argv[j],"help")) {
+            reply = sdsnew(
+                "`$SYMBOL mc [period <days>] [range <days>]`\n"
+                "A period of 0 (default) means to use a random period "
+                "between buy and sell. The default range is 365 days.");
+            goto cleanup;
+        }
     }
 
     /* Fetch the data. Sometimes we'll not obtain enough data points. */
-    ydata *yd = getYahooData(YDATA_TS,symbol,"1y","1d");
-    if (yd == NULL || yd->ts_len < 100) {
-        reply = sdscatprintf(reply,"Can't fetch historical data for '%s'",
+    yd = getYahooData(YDATA_TS,symbol, (range <= 365) ? "1y" : "5y","1d");
+    if (yd == NULL || yd->ts_len < range) {
+        reply = sdscatprintf(reply,
+            "Can't fetch historical data for '%s', use the range option to "
+            "limit the amount of history to analyze.",
                              symbol);
         goto cleanup;
     }
@@ -1003,14 +1021,14 @@ void botHandleMontecarloRequest(botRequest *br, sds symbol, sds *argv, int argc)
                          Montecarlo simulation. */
 
     mcres mc;
-    computeMontecarlo(yd,365,count,period,&mc);
+    computeMontecarlo(yd,range,count,period,&mc);
     reply = sdscatprintf(reply,
         "Random Buying/selling '%s' simulation report:\n"
         "Average gain/loss: %.2f%% (+/-%.2f%%).\n"
         "Best outcome : %.2f%%.\n"
         "Worst outcome: %.2f%%.\n"
-        "%d experiments with %s interval of %.2f days.",
-        symbol, mc.gain, mc.absdiff, mc.maxgain, mc.mingain, count,
+        "%d experiments within %d days range using %s interval of %.2f days.",
+        symbol, mc.gain, mc.absdiff, mc.maxgain, mc.mingain, count, range,
         period ? "a fixed" : "an average",
         mc.avgper);
 
