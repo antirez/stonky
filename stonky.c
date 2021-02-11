@@ -723,44 +723,57 @@ sds sdsCatPriceRequest(sds s, sds symbol, int flags) {
             (flags & STONKY_SHORT) ? "Can't find data for '%s'" :
                                      "%s: no data avaiable",
         symbol);
+        return s;
+    }
+
+    /* Select the emoji according to the price change. */
+    double change = strtod(yd->regchange,NULL);
+    int emoidx = 0;
+    char *emoset[] = {"⚰️","🔴","🟢","🚀"};
+    /* Note: ordering of the followign if statements is important. */
+    if (change < 0) emoidx = 1;
+    if (change < -8) emoidx = 0;
+    if (change >= 0) emoidx = 2;
+    if (change > 8) emoidx = 3;
+
+    if (flags & STONKY_SHORT) {
+        s = sdscatprintf(s,
+            "%s[%s](https://google.com/search?q=%s+stock): %.02f%s (%s%s)",
+            emoset[emoidx],
+            yd->symbol,
+            yd->symbol,
+            yd->reg,
+            yd->csym,
+            (yd->regchange && yd->regchange[0] == '-') ? "" : "+",
+            yd->regchange);
     } else {
-        if (flags & STONKY_SHORT) {
-            s = sdscatprintf(s,
-                "[%s](https://google.com/search?q=%s+stock): %.02f%s (%s%s)",
-                yd->symbol,
-                yd->symbol,
-                yd->reg,
-                yd->csym,
-                (yd->regchange && yd->regchange[0] == '-') ? "" : "+",
-                yd->regchange);
-        } else {
-            s = sdscatprintf(s,
-                "%s ([%s](https://google.com/search?q=%s+stock)) "
-                "price is %.02f%s (%s%s)",
-                yd->name,
-                yd->symbol,
-                yd->symbol,
-                yd->reg,
-                yd->csym,
-                (yd->regchange && yd->regchange[0] == '-') ? "" : "+",
-                yd->regchange);
-        }
-        if (debugMode) {
-            printf("%s pretime:%d regtime:%d posttime:%d\n",
-                yd->symbol,
-                (int)yd->pretime, (int)yd->regtime, (int)yd->posttime);
-        }
-        if (yd->pretime > yd->regtime) {
-            s = sdscatprintf(s," | %s: %.02f%s (%s%s)",
-                (flags & STONKY_SHORT) ? "pre" : "pre-market",
-                yd->pre, yd->csym, yd->prechange[0] == '-' ? "" : "+",
-                yd->prechange);
-        } else if (yd->posttime > yd->regtime) {
-            s = sdscatprintf(s," | %s: %.02f%s (%s%s)",
-                (flags & STONKY_SHORT) ? "post" : "after-hours",
-                yd->post, yd->csym, yd->postchange[0] == '-' ? "" : "+",
-                yd->postchange);
-        }
+        s = sdscatprintf(s,
+            "%s%s ([%s](https://google.com/search?q=%s+stock)) "
+            "price is %.02f%s (%s%s)",
+            emoset[emoidx],
+            yd->name,
+            yd->symbol,
+            yd->symbol,
+            yd->reg,
+            yd->csym,
+            (yd->regchange && yd->regchange[0] == '-') ? "" : "+",
+            yd->regchange);
+    }
+    if (debugMode) {
+        printf("%s pretime:%d regtime:%d posttime:%d\n",
+            yd->symbol,
+            (int)yd->pretime, (int)yd->regtime, (int)yd->posttime);
+    }
+    if (yd->pretime > yd->regtime) {
+        s = sdscatprintf(s," | %s: %.02f%s (%s%s)",
+            (flags & STONKY_SHORT) ? "pre" : "pre-market",
+            yd->pre, yd->csym, yd->prechange[0] == '-' ? "" : "+",
+            yd->prechange);
+    } else if (yd->posttime > yd->regtime) {
+        s = sdscatprintf(s," | %s: %.02f%s (%s%s)",
+            (flags & STONKY_SHORT) ? "post" : "after-hours",
+            yd->post, yd->csym, yd->postchange[0] == '-' ? "" : "+",
+            yd->postchange);
     }
     freeYahooData(yd);
     return s;
@@ -946,7 +959,7 @@ void botHandleMontecarloRequest(botRequest *br, sds symbol) {
         "Buying and selling '%s' at random days during "
         "the past year would result in:\n"
         "Average gain/loss: %.2f%% (+/-%.2f%%).\n"
-        "Bets outcome : %.2f%%.\n"
+        "Best outcome : %.2f%%.\n"
         "Worst outcome: %.2f%%.\n"
         "%d experiments with an average interval of %.2f days.",
         symbol, mc.gain, mc.absdiff, mc.maxgain, mc.mingain, count, mc.avgper);
