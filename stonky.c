@@ -1012,12 +1012,22 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
 #define OUTCOME_KO 2
 
 /* Get the class for a given time series of prices. */
-int fillNetGetClass(float *data, int ihours, int afterhours) {
+int fillNetGetClass(float *data, int iperiod, int afterperiod) {
     double avgprice = 0;
-    for (int i = ihours; i < ihours+afterhours; i++)
+    for (int i = iperiod; i < iperiod+afterperiod; i++)
         avgprice += data[i];
-    avgprice /= afterhours;
-    double gain = (avgprice / data[ihours-1])-1;
+    avgprice /= afterperiod;
+    double gain = (avgprice / data[iperiod-1])-1;
+
+#if 0
+    printf("[");
+    for (int i = 0; i < iperiod; i++) printf("%f,",data[i]);
+    printf("] - ");
+    printf("{");
+    for (int i = iperiod; i < iperiod+afterperiod; i++) printf("%f,",data[i]);
+    printf("} = ");
+    printf("base: %f avg:%f %f\n", data[iperiod-1], avgprice, gain);
+#endif
 
     int class;
     if (gain > 0.005) class = OUTCOME_OK;
@@ -1026,34 +1036,34 @@ int fillNetGetClass(float *data, int ihours, int afterhours) {
     return class;
 }
 
-/* Normalize the first 'ihours' samples of 'data' in the range from 0 to 1. */
-void fillNetNormalize(float *data, int ihours) {
+/* Normalize the first 'iperiod' samples of 'data' in the range from 0 to 1. */
+void fillNetNormalize(float *data, int iperiod) {
     float min = data[0];
     float max = data[0];
-    for (int i = 0; i < ihours; i++) {
+    for (int i = 0; i < iperiod; i++) {
         float aux = data[i];
         if (aux > max) max = aux;
         if (aux < min) min = aux;
     }
     double norm = max-min;
-    for (int i = 0; i < ihours; i++)
+    for (int i = 0; i < iperiod; i++)
         data[i] = (data[i]-min) / norm;
 }
 
 /* Populate the training arrays. */
-void fillNetData(float **inputs, float **outputs, int setlen, float *data, int ihours, int afterhours) {
+void fillNetData(float **inputs, float **outputs, int setlen, float *data, int iperiod, int afterperiod) {
     int numclasses = 3;
     int classhits[3] = {0};
 
     for (int j = 0; j < setlen; j++) {
         /* Fill this input with normalized data. */
-        inputs[j] = xmalloc(sizeof(float)*ihours);
-        for (int i = 0; i < ihours; i++)
+        inputs[j] = xmalloc(sizeof(float)*iperiod);
+        for (int i = 0; i < iperiod; i++)
             inputs[j][i] = data[j+i];
-        fillNetNormalize(inputs[j],ihours);
+        fillNetNormalize(inputs[j],iperiod);
 
         /* Predict class. */
-        int class = fillNetGetClass(data+j,ihours,afterhours);
+        int class = fillNetGetClass(data+j,iperiod,afterperiod);
         classhits[class]++;
 
         /* Set the output class. */
@@ -1062,15 +1072,6 @@ void fillNetData(float **inputs, float **outputs, int setlen, float *data, int i
         outputs[j][1] = 0;
         outputs[j][2] = 0;
         outputs[j][class] = 1;
-
-#if 0
-        for (int k = 0; k < ihours; k++) printf("%f,",inputs[j][k]);
-        printf(" = ");
-        printf("%f (gain %f | class %f %f %f),",
-            avgprice,gain,
-            outputs[j][0],outputs[j][1],outputs[j][2]);
-        printf("\n");
-#endif
     }
     printf("Trained with class hits %d %d %d\n", classhits[0],
            classhits[1], classhits[2]);
@@ -1089,7 +1090,7 @@ void botHandleNeuralNetworkRequest(botRequest *br, sds symbol) {
     float **outputs = NULL;
 
     /* Fetch the data. Sometimes we'll not obtain enough data points. */
-    ydata *yd = getYahooData(YDATA_TS,symbol,"7d","1m");
+    ydata *yd = getYahooData(YDATA_TS,symbol,"2y","1h");
     if (debugMode) printf("Training the net with %d samples\n",yd->ts_len);
     if (yd == NULL || yd->ts_len < 1000) {
         reply = sdscatprintf(reply,"Missing historical data for '%s'",
@@ -1107,15 +1108,15 @@ void botHandleNeuralNetworkRequest(botRequest *br, sds symbol) {
 
     /* Create a neural network that takes N hours as input, and emits
      * the outcome of the average next hours price (ok, neutral, ko). */
-    int ihours = 7*10;    /* Get as input the previous "ihours" hours. */
-    int afterhours = 7*2; /* Predict average price of the next "afterhours". */
-    int numclasses = 3;   /* Three prediction classes. */
+    int iperiod = 60;      /* Get as input the previous "iperiod" samples. */
+    int afterperiod = 3;   /* Predict average price of "afterperiod" samples. */
+    int numclasses = 3;    /* Three prediction classes. */
 
     kad_node_t *t;
     kann_t *ann;
 
     /* Create the neural network. */
-    t = kann_layer_input(ihours);
+    t = kann_layer_input(iperiod);
     t = kad_relu(kann_layer_dense(t, 1000));
     t = kad_relu(kann_layer_dense(t, 500));
     t = kann_layer_cost(t, numclasses, KANN_C_CEM);
@@ -1123,10 +1124,10 @@ void botHandleNeuralNetworkRequest(botRequest *br, sds symbol) {
 
     /* Create the training and testing datasets. */
     int verlen = 200; /* Verify the final net using this 200 hours of data. */
-    int setlen = yd->ts_len-ihours-afterhours-verlen;
+    int setlen = yd->ts_len-iperiod-afterperiod-verlen;
     inputs = xmalloc(setlen*sizeof(float*));
     outputs = xmalloc(setlen*sizeof(float*));
-    fillNetData(inputs,outputs,setlen,yd->ts_data,ihours,afterhours);
+    fillNetData(inputs,outputs,setlen,yd->ts_data,iperiod,afterperiod);
 
     /* Perform the training. */
     int mini_size = 64;
@@ -1145,27 +1146,27 @@ void botHandleNeuralNetworkRequest(botRequest *br, sds symbol) {
 
     /* Execute the net to predict the next days price. */
     float normfactor;
-    float min = yd->ts_data[yd->ts_len-1-ihours];
-    float max = yd->ts_data[yd->ts_len-1-ihours];
-    for (int j = 0; j < ihours; j++) {
-        float aux = yd->ts_data[yd->ts_len-1-ihours+j];
+    float min = yd->ts_data[yd->ts_len-1-iperiod];
+    float max = yd->ts_data[yd->ts_len-1-iperiod];
+    for (int j = 0; j < iperiod; j++) {
+        float aux = yd->ts_data[yd->ts_len-1-iperiod+j];
         if (aux > max) max = aux;
         if (aux < min) min = aux;
     }
     normfactor = max-min;
 
     /* Verify the network training with never seen data. */
-    float *x = xmalloc(sizeof(float)*ihours);
+    float *x = xmalloc(sizeof(float)*iperiod);
     const float *y;
     float *data = yd->ts_data+setlen;
     int ok_output = 0, err_output = 0;
     for (int j = 0; j < verlen; j++) {
-        for (int i = 0; i < ihours; i++)
+        for (int i = 0; i < iperiod; i++)
             x[i] = data[i];
-        fillNetNormalize(x,ihours);
+        fillNetNormalize(x,iperiod);
         y = kann_apply1(ann,x);
 
-        int expected = fillNetGetClass(data,ihours,afterhours);
+        int expected = fillNetGetClass(data,iperiod,afterperiod);
         int maxidx = 0;
         float maxval = y[0];
         for (int k = 0; k < numclasses; k++) {
