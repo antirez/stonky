@@ -885,9 +885,14 @@ typedef struct {
 } mcres;
 
 /* Perform a Montecarlo simulation where the stock is bought and sold
- * at random days within the specified 'range' interval. Return data
- * as specified in the mcres structure. */
-void computeMontecarlo(ydata *yd, int range, int count, mcres *mc) {
+ * at random days within the specified:
+ *
+ *  range: last N days where to perform the experiment.
+ *  count: number of experiments.
+ *  period: number of days between experiments, if 0 it is random.
+ *
+ * The result is stored in the mcres structure passed by reference. */
+void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
     int buyday, sellday;
     double total_gain = 0;
     double total_interval = 0;
@@ -897,21 +902,38 @@ void computeMontecarlo(ydata *yd, int range, int count, mcres *mc) {
     else if (range < yd->ts_len) data += yd->ts_len-range;
     double *gains = xmalloc(sizeof(double)*count);
 
+    /* The period (days of difference) between buy and sell must always
+     * be less than the range (total days considered). If we have a range
+     * of 2 days, the maximum period must be 1 in order to buy and
+     * sell in the only two days that are 1 day apart. */
+    if (period >= range) period = range-1;
+
     for (int j = 0; j < count; j++) {
         /* We want to pick two different days, and since the API sometimes
          * return data with fields set to zero, also make sure that
          * we pick non-zero days. */
-        do {
-            buyday = rand() % range;
-        } while (data[buyday] == 0);
-        do {
-            sellday = rand() % range;
-        } while(sellday == buyday || data[sellday] == 0);
+        if (period == 0) {
+            /* Random days. */
+            do {
+                buyday = rand() % range;
+            } while (data[buyday] == 0);
+            do {
+                sellday = rand() % range;
+            } while(sellday == buyday || data[sellday] == 0);
 
-        if (buyday > sellday) {
-            int t = buyday;
-            buyday = sellday;
-            sellday = t;
+            if (buyday > sellday) {
+                int t = buyday;
+                buyday = sellday;
+                sellday = t;
+            }
+        } else {
+            /* Fixed days interval. Pick the first days at random, then
+             * use the offset to pick the other. Note that period < range
+             * since we checked at the function entry. */
+            do {
+                buyday = rand() % (range-period);
+            } while (data[buyday] == 0);
+            sellday = buyday+period;
         }
 
         double buy_price = data[buyday];
@@ -947,8 +969,17 @@ void computeMontecarlo(ydata *yd, int range, int count, mcres *mc) {
 
 /* Fetch 1y of data and performs a Montecarlo simulation where we buy
  * and sell at random moments, calculating the average gain (or loss). */
-void botHandleMontecarloRequest(botRequest *br, sds symbol) {
+void botHandleMontecarloRequest(botRequest *br, sds symbol, sds *argv, int argc) {
     sds reply = sdsempty();
+    int period = 0;
+
+    /* Parse arguments. */
+    for (int j = 0; j < argc; j++) {
+        int moreargs = argc-j-1;
+        if (!strcasecmp(argv[j],"period") && moreargs)
+            period = atoi(argv[++j]);
+        /* Ignore bad format. */
+    }
 
     /* Fetch the data. Sometimes we'll not obtain enough data points. */
     ydata *yd = getYahooData(YDATA_TS,symbol,"1y","1d");
@@ -972,15 +1003,16 @@ void botHandleMontecarloRequest(botRequest *br, sds symbol) {
                          Montecarlo simulation. */
 
     mcres mc;
-    computeMontecarlo(yd,365,count,&mc);
+    computeMontecarlo(yd,365,count,period,&mc);
     reply = sdscatprintf(reply,
-        "Buying and selling '%s' at random days during "
-        "the past year would result in:\n"
+        "Random Buying/selling '%s' simulation report:\n"
         "Average gain/loss: %.2f%% (+/-%.2f%%).\n"
         "Best outcome : %.2f%%.\n"
         "Worst outcome: %.2f%%.\n"
-        "%d experiments with an average interval of %.2f days.",
-        symbol, mc.gain, mc.absdiff, mc.maxgain, mc.mingain, count, mc.avgper);
+        "%d experiments with %s interval of %.2f days.",
+        symbol, mc.gain, mc.absdiff, mc.maxgain, mc.mingain, count,
+        period ? "a fixed" : "an average",
+        mc.avgper);
 
 cleanup:
     if (reply) botSendMessage(br->target,reply,0);
@@ -1057,11 +1089,11 @@ void *botHandleRequest(void *arg) {
     {
         /* $AAPL 5d */
         botHandleChartRequest(br,argv[0],argv[1]);
-    } else if (argc == 2 && (!strcasecmp(argv[1],"mc") ||
+    } else if (argc >= 2 && (!strcasecmp(argv[1],"mc") ||
                              !strcasecmp(argv[1],"montecarlo")))
     {
-        /* $AAPL mc | montecarlo */
-        botHandleMontecarloRequest(br,argv[0]);
+        /* $AAPL mc | montecarlo [options] */
+        botHandleMontecarloRequest(br,argv[0],argv+1,argc-1);
     } else {
         botSendMessage(br->target,
             "Sorry, I can't understand your request. Try $HELP.",0);
