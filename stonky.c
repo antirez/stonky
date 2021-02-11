@@ -247,7 +247,6 @@ sds makeHttpCall(const char *url, int *resptr) {
     CURLcode res;
     sds body = sdsempty();
 
-    curl_global_init(CURL_GLOBAL_DEFAULT);
     curl = curl_easy_init();
     if (curl) {
         curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -266,12 +265,16 @@ sds makeHttpCall(const char *url, int *resptr) {
         if (res != CURLE_OK) {
             const char *errstr = curl_easy_strerror(res);
             body = sdscat(body,errstr);
+        } else {
+            /* Return C_ERR if the request worked but returned a 500 code. */
+            long code;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+            if (code == 500 && resptr) *resptr = C_ERR;
         }
 
         /* always cleanup */
         curl_easy_cleanup(curl);
     }
-    curl_global_cleanup();
     return body;
 }
 
@@ -1188,6 +1191,7 @@ int main(int argc, char **argv) {
 
     /* Initializations. Note that we don't redefine the SQLite allocator,
      * since SQLite errors are always handled by Stonky anyway. */
+    curl_global_init(CURL_GLOBAL_DEFAULT);
     if (BotApiKey == NULL) readApiKeyFromFile();
     if (BotApiKey == NULL) {
         printf("Provide a bot API key via --apikey or storing a file named "
