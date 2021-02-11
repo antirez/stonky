@@ -976,7 +976,7 @@ void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
 void botHandleMontecarloRequest(botRequest *br, sds symbol, sds *argv, int argc) {
     sds reply = sdsempty();
     int period = 0;
-    int range = 365;
+    int range = 250; /* Markets are open a bit more than 250 days per year. */
     ydata *yd = NULL;
 
     /* Parse arguments. */
@@ -988,6 +988,10 @@ void botHandleMontecarloRequest(botRequest *br, sds symbol, sds *argv, int argc)
         } else if (!strcasecmp(argv[j],"range") && moreargs) {
             range = atoi(argv[++j]);
             if (range <= 0) range = 1;
+            if (range > 2) {
+                /* Adjust for the amount of open market days in 1 year. */
+                range = (double)range*5/7.2;
+            }
         } else if (!strcasecmp(argv[j],"help")) {
             reply = sdsnew(
                 "`$SYMBOL mc [period <days>] [range <days>]`\n"
@@ -998,7 +1002,7 @@ void botHandleMontecarloRequest(botRequest *br, sds symbol, sds *argv, int argc)
     }
 
     /* Fetch the data. Sometimes we'll not obtain enough data points. */
-    yd = getYahooData(YDATA_TS,symbol, (range <= 365) ? "1y" : "5y","1d");
+    yd = getYahooData(YDATA_TS,symbol,"5y","1d");
     if (yd == NULL || yd->ts_len < range) {
         reply = sdscatprintf(reply,
             "Can't fetch historical data for '%s', use the range option to "
@@ -1027,7 +1031,8 @@ void botHandleMontecarloRequest(botRequest *br, sds symbol, sds *argv, int argc)
         "Average gain/loss: %.2f%% (+/-%.2f%%).\n"
         "Best outcome : %.2f%%.\n"
         "Worst outcome: %.2f%%.\n"
-        "%d experiments within %d days range using %s interval of %.2f days.",
+        "%d experiments within %d days (adjusted) range using %s "
+        "interval of %.2f days.",
         symbol, mc.gain, mc.absdiff, mc.maxgain, mc.mingain, count, range,
         period ? "a fixed" : "an average",
         mc.avgper);
