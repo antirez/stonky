@@ -1245,7 +1245,9 @@ int loadSymbols(void) {
  * special features, and putting them into lists. */
 void *scanStocksThread(void *arg) {
     UNUSED(arg);
+    dbHandle = dbInit(0);
     int j = 0;
+
     while(1) {
         sds symbol = Symbols[j % NumSymbols];
         j++;
@@ -1282,12 +1284,12 @@ void *scanStocksThread(void *arg) {
             mcday.absdiffper < 100)
         {
             if (verboseMode) {
-                printf("%s:\n"
+                printf("%d/%d %s:\n"
                        "  %f (+-%f) [%f/%f] ->\n"
                        "  %f (+-%f) [%f/%f] ->\n"
                        "  %f (+-%f) [%f/%f]\n"
                        "D %f (+-%f %f%%) [%f/%f]\n",
-                    symbol,
+                    j,NumSymbols,symbol,
                     mclong.gain, mclong.absdiff, mclong.mingain,
                     mclong.maxgain, mcshort.gain, mcshort.absdiff,
                     mcshort.mingain, mcshort.maxgain, mcvs.gain,
@@ -1295,6 +1297,9 @@ void *scanStocksThread(void *arg) {
                     mcday.absdiff, mcday.absdiffper, mcday.mingain,
                     mcday.maxgain);
             }
+            dbAddStockToList("tothemoon", symbol);
+        } else {
+            dbDelStockFromList("tothemoon", symbol, 0);
         }
         sleep(1);
     }
