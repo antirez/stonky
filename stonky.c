@@ -58,6 +58,7 @@
 #define STONKY_SHORT (1<<0)     /* Use short form for some output. */
 
 int debugMode = 0; /* If true enables debugging info (--debug option). */
+int verboseMode = 0; /* If true enables verbose info (--verbose && --debug) */
 char *dbFile = "/tmp/stonky.sqlite";    /* Change with --dbfile. */
 _Thread_local sqlite3 *dbHandle = NULL; /* Per-thread sqlite handle. */
 sds BotApiKey = NULL;
@@ -950,7 +951,7 @@ void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
         double gain = (sell_price-buy_price)/buy_price*100;
         gains[j] = gain;
         if (debugMode) {
-            printf("buy (%d) %f sell (%d) %f: %f\n",
+            printf("Montecarlo buy (%d) %f sell (%d) %f: %f\n",
                 buyday, buy_price, sellday, sell_price, gain);
         }
         total_gain += gain;
@@ -1190,6 +1191,8 @@ int64_t botProcessUpdates(int64_t offset, int timeout) {
             freeBotRequest(bt);
             continue;
         }
+        if (verboseMode)
+            printf("Starting thread to serve: \"%s\"\n",bt->request);
     }
 
 fmterr:
@@ -1234,13 +1237,14 @@ int loadSymbols(void) {
         Symbols[with] = aux;
     }
 
-    if (debugMode) printf("%d Symbols loaded\n", NumSymbols);
+    if (verboseMode) printf("%d Symbols loaded\n", NumSymbols);
     return C_OK;
 }
 
 /* This thread continuously scan stocks looking for ones that have certain
  * special features, and putting them into lists. */
 void *scanStocksThread(void *arg) {
+    UNUSED(arg);
     int j = 0;
     while(1) {
         sds symbol = Symbols[j % NumSymbols];
@@ -1275,21 +1279,22 @@ void *scanStocksThread(void *arg) {
             mcvs.gain > 8 &&
             mclong.gain < 5 &&
             mcday.gain > 1 &&
-            mcday.absdiffper < 100 /* &&
-            mcday.gain > mcday.absdiff */)
+            mcday.absdiffper < 100)
         {
-            printf("%s:\n"
-                   "  %f (+-%f) [%f/%f] ->\n"
-                   "  %f (+-%f) [%f/%f] ->\n"
-                   "  %f (+-%f) [%f/%f]\n"
-                   "D %f (+-%f %f%%) [%f/%f]\n",
-                symbol,
-                mclong.gain, mclong.absdiff, mclong.mingain, mclong.maxgain,
-                mcshort.gain, mcshort.absdiff, mcshort.mingain, mcshort.maxgain,
-                mcvs.gain, mcvs.absdiff, mcvs.mingain, mcvs.maxgain,
-                mcday.gain, mcday.absdiff, mcday.absdiffper, mcday.mingain, mcday.maxgain);
-        } else {
-            printf("%s: %f\n", symbol,mcvs.gain);
+            if (verboseMode) {
+                printf("%s:\n"
+                       "  %f (+-%f) [%f/%f] ->\n"
+                       "  %f (+-%f) [%f/%f] ->\n"
+                       "  %f (+-%f) [%f/%f]\n"
+                       "D %f (+-%f %f%%) [%f/%f]\n",
+                    symbol,
+                    mclong.gain, mclong.absdiff, mclong.mingain,
+                    mclong.maxgain, mcshort.gain, mcshort.absdiff,
+                    mcshort.mingain, mcshort.maxgain, mcvs.gain,
+                    mcvs.absdiff, mcvs.mingain, mcvs.maxgain, mcday.gain,
+                    mcday.absdiff, mcday.absdiffper, mcday.mingain,
+                    mcday.maxgain);
+            }
         }
         sleep(1);
     }
@@ -1353,10 +1358,14 @@ int main(int argc, char **argv) {
         int morearg = argc-j-1;
         if (!strcmp(argv[j],"--debug")) {
             debugMode = 1;
+            verboseMode = 1;
+        } else if (!strcmp(argv[j],"--verbose")) {
+            verboseMode = 1;
         } else if (!strcmp(argv[j],"--apikey") && morearg) {
             BotApiKey = sdsnew(argv[++j]);
         } else {
-            printf("Usage: %s [--debug] [--apikey <apikey>]\n", argv[0]);
+            printf(
+            "Usage: %s [--apikey <apikey>] [--debug] [--verbose]\n",argv[0]);
             exit(1);
         }
     }
