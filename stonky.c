@@ -883,6 +883,7 @@ typedef struct {
     double gain;    /* Average gain. */
     double mingain, maxgain;    /* Minimum and maximum gains. */
     double absdiff; /* Average of absolute difference of gains. */
+    double absdiffper; /* Percentage of absdiff compared to gain. */
     double avgper;  /* Average period of buy/sell action, in days. */
 } mcres;
 
@@ -914,14 +915,19 @@ void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
         /* We want to pick two different days, and since the API sometimes
          * return data with fields set to zero, also make sure that
          * we pick non-zero days. */
+        int maxtries; /* To avoid infinite loops when picking days. */
         if (period == 0) {
             /* Random days. */
+            maxtries = 10;
             do {
                 buyday = rand() % range;
-            } while (data[buyday] == 0);
+            } while (data[buyday] == 0 && maxtries--);
+
+            maxtries = 10;
             do {
                 sellday = rand() % range;
-            } while(sellday == buyday || data[sellday] == 0);
+            } while((sellday == buyday || data[sellday] == 0) &&
+                    maxtries--);
 
             if (buyday > sellday) {
                 int t = buyday;
@@ -932,9 +938,10 @@ void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
             /* Fixed days interval. Pick the first days at random, then
              * use the offset to pick the other. Note that period < range
              * since we checked at the function entry. */
+            maxtries = 10;
             do {
                 buyday = rand() % (range-period);
-            } while (data[buyday] == 0);
+            } while (data[buyday] == 0 && maxtries--);
             sellday = buyday+period;
         }
 
@@ -966,6 +973,7 @@ void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
         }
     }
     mc->absdiff /= count;
+    mc->absdiffper = mc->absdiff/fabs(mc->gain)*100;
     xfree(gains);
 }
 
@@ -1233,8 +1241,10 @@ int loadSymbols(void) {
 /* This thread continuously scan stocks looking for ones that have certain
  * special features, and putting them into lists. */
 void *scanStocksThread(void *arg) {
-    for (int j = 0; j < NumSymbols; j++) {
-        sds symbol = Symbols[j];
+    int j = 0;
+    while(1) {
+        sds symbol = Symbols[j % NumSymbols];
+        j++;
 
         if (debugMode) printf("Background scanning %s\n", symbol);
 
@@ -1253,28 +1263,34 @@ void *scanStocksThread(void *arg) {
 
         /* Compute Montecarlo two times, for the last year, and for
          * the last two months, detecting big changes. */
-        mcres mclong, mcshort, mcvs;
+        mcres mclong, mcshort, mcvs, mcday;
         computeMontecarlo(yd,250,1000,5,&mclong);
         computeMontecarlo(yd,50,1000,5,&mcshort);
         computeMontecarlo(yd,20,1000,5,&mcvs);
+        computeMontecarlo(yd,10,1000,1,&mcday);
         freeYahooData(yd);
 
         if (mclong.gain < mcshort.gain &&
             mcshort.gain <  mcvs.gain &&
-            mcvs.gain > 15 &&
-            /* mcshort.gain > 5 && */
-            mclong.gain < 5)
+            mcvs.gain > 8 &&
+            mclong.gain < 5 &&
+            mcday.gain > 1 &&
+            mcday.absdiffper < 100 /* &&
+            mcday.gain > mcday.absdiff */)
         {
             printf("%s:\n"
                    "  %f (+-%f) [%f/%f] ->\n"
                    "  %f (+-%f) [%f/%f] ->\n"
-                   "  %f (+-%f) [%f/%f]\n",
+                   "  %f (+-%f) [%f/%f]\n"
+                   "D %f (+-%f %f%%) [%f/%f]\n",
                 symbol,
                 mclong.gain, mclong.absdiff, mclong.mingain, mclong.maxgain,
                 mcshort.gain, mcshort.absdiff, mcshort.mingain, mcshort.maxgain,
-                mcvs.gain, mcvs.absdiff, mcvs.mingain, mcvs.maxgain);
+                mcvs.gain, mcvs.absdiff, mcvs.mingain, mcvs.maxgain,
+                mcday.gain, mcday.absdiff, mcday.absdiffper, mcday.mingain, mcday.maxgain);
+        } else {
+            printf("%s: %f\n", symbol,mcvs.gain);
         }
-
         sleep(1);
     }
     return NULL;
