@@ -61,6 +61,8 @@ int debugMode = 0; /* If true enables debugging info (--debug option). */
 char *dbFile = "/tmp/stonky.sqlite";    /* Change with --dbfile. */
 _Thread_local sqlite3 *dbHandle = NULL; /* Per-thread sqlite handle. */
 sds BotApiKey = NULL;
+sds *Symbols; /* Global list of symbols loaded from marketdata/symbols.txt */
+int NumSymbols; /* Number of elements in Symbols. */
 
 /* ============================================================================
  * Allocator wrapper: we want to exit on OOM instead of trying to recover.
@@ -939,10 +941,6 @@ void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
         double buy_price = data[buyday];
         double sell_price = data[sellday];
         double gain = (sell_price-buy_price)/buy_price*100;
-        printf("buy[%d]=%f sell[%d]=%f gain=%f\n",
-            buyday,buy_price,
-            sellday,sell_price,
-            gain);
         gains[j] = gain;
         if (debugMode) {
             printf("buy (%d) %f sell (%d) %f: %f\n",
@@ -1193,6 +1191,105 @@ fmterr:
 }
 
 /* =============================================================================
+ * Periodic scanning of symbols looking for stocks having dramatic changes
+ * ===========================================================================*/
+
+/* Load symbols in the global Symbols array, also populating NumSymbols.
+ * If the file can't be loaded C_ERR is returned. On success the function
+ * returns C_OK. */
+int loadSymbols(void) {
+    if (Symbols != NULL) return C_ERR; /* Already loaded. */
+    FILE *fp = fopen("marketdata/symbols.txt","r");
+    if (fp == NULL) return C_ERR;
+
+    char buf[1024];
+    while (fgets(buf,sizeof(buf),fp) != NULL) {
+        buf[sizeof(buf)-1] = '\0';
+        for (unsigned int i = 0; buf[i] && i < sizeof(buf); i++) {
+            if (buf[i] == '\r' || buf[i] == '\n') {
+                buf[i] = 0;
+                break;
+            }
+        }
+        Symbols = xrealloc(Symbols,sizeof(sds)*(NumSymbols+1));
+        Symbols[NumSymbols++] = sdsnew(buf);
+    }
+    fclose(fp);
+
+    /* Shuffle them: since we don't store the symbols in a database,
+     * we want to start scanning them in different order at every
+     * restart. */
+    for (int j = 0; j < NumSymbols; j++) {
+        int with = rand() % NumSymbols;
+        sds aux = Symbols[j];
+        Symbols[j] = Symbols[with];
+        Symbols[with] = aux;
+    }
+
+    if (debugMode) printf("%d Symbols loaded\n", NumSymbols);
+    return C_OK;
+}
+
+/* This thread continuously scan stocks looking for ones that have certain
+ * special features, and putting them into lists. */
+void *scanStocksThread(void *arg) {
+    for (int j = 0; j < NumSymbols; j++) {
+        sds symbol = Symbols[j];
+
+        if (debugMode) printf("Background scanning %s\n", symbol);
+
+        /* Fetch 5y of data. Abort if we have less than 250 prices. */
+        ydata *yd = getYahooData(YDATA_TS,symbol,"5y","1d");
+        if (yd == NULL || yd->ts_len < 250) {
+            freeYahooData(yd);
+            continue;
+        }
+
+        /* Don't handle data with more than 1% of bogus entries. */
+        if (checkYahooTimeSeriesValidity(yd,1) == C_ERR) {
+            freeYahooData(yd);
+            continue;
+        }
+
+        /* Compute Montecarlo two times, for the last year, and for
+         * the last two months, detecting big changes. */
+        mcres mclong, mcshort, mcvs;
+        computeMontecarlo(yd,250,1000,5,&mclong);
+        computeMontecarlo(yd,50,1000,5,&mcshort);
+        computeMontecarlo(yd,20,1000,5,&mcvs);
+        freeYahooData(yd);
+
+        if (mclong.gain < mcshort.gain &&
+            mcshort.gain <  mcvs.gain &&
+            mcvs.gain > 15 &&
+            /* mcshort.gain > 5 && */
+            mclong.gain < 5)
+        {
+            printf("%s:\n"
+                   "  %f (+-%f) [%f/%f] ->\n"
+                   "  %f (+-%f) [%f/%f] ->\n"
+                   "  %f (+-%f) [%f/%f]\n",
+                symbol,
+                mclong.gain, mclong.absdiff, mclong.mingain, mclong.maxgain,
+                mcshort.gain, mcshort.absdiff, mcshort.mingain, mcshort.maxgain,
+                mcvs.gain, mcvs.absdiff, mcvs.mingain, mcvs.maxgain);
+        }
+
+        sleep(1);
+    }
+    return NULL;
+}
+
+/* Start background threads continuously doing certain tasks. */
+void startBackgroundTasks(void) {
+    pthread_t tid;
+    if (pthread_create(&tid,NULL,scanStocksThread,NULL) != 0) {
+        printf("Can't create the thread to scan stocks on the background\n");
+        exit(1);
+    }
+}
+
+/* =============================================================================
  * Bot main loop
  * ===========================================================================*/
 
@@ -1261,6 +1358,8 @@ int main(int argc, char **argv) {
     if (dbHandle == NULL) exit(1);
     cJSON_Hooks jh = {.malloc_fn = xmalloc, .free_fn = xfree};
     cJSON_InitHooks(&jh);
+    loadSymbols();
+    startBackgroundTasks();
 
     /* Enter the infinite loop handling the bot. */
     botMain();
