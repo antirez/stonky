@@ -16,7 +16,8 @@ in C and is released under the BSD license.
 ## Usage
 
 To use the bot, send messages in a Telegram channel where the bot is an
-administrator. All the Stonky commands start with the "$" character.
+administrator, otherwise directly address the bot via a private message.
+All the Stonky commands start with the "$" character.
 
     $AAPL           -- Reply with an update about AAPL price.
     $AAPL 1y        -- Reply with an ASCII art graph of AAPL price during
@@ -32,11 +33,30 @@ analysis.
 
     $AAPL mc period 10 range 200
 
+## Lists support
+
 The bot supports the concept of "list of stocks", you can add stocks to
 a list, then query the list to have all the prices with a single message:
 
     $mylist: +VMW +AAPL +T -KO  -- Modify the list adding/removing stocks.
     $mylist:                    -- Ask prices of stocks in a given list.
+
+## Background analysis of stocks
+
+If the file `marketdata/symbols.txt` exists in the bot working directory,
+and contains a list of stock symbols (it is included in the default
+distribution, so the file exists unless you remove it intentionally), the
+bot starts continuously analyzing the listed stocks, one per second, looking
+for stocks that performed relatively poorly in the past but that are showing
+to have great momentum recently.
+
+Such stocks are put into a list that is handled by the bot itself. You
+can see the stocks in this list by writing simply:
+
+    $tothemoon:
+
+In the channel where the bot exists or directly to the bot itself as a
+private message.
 
 ## Output examples
 
