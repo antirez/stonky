@@ -1389,7 +1389,7 @@ int main(int argc, char **argv) {
     cJSON_Hooks jh = {.malloc_fn = xmalloc, .free_fn = xfree};
     cJSON_InitHooks(&jh);
     loadSymbols();
-    startBackgroundTasks();
+    if (Symbols) startBackgroundTasks();
 
     /* Enter the infinite loop handling the bot. */
     botMain();
