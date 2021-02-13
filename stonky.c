@@ -932,10 +932,10 @@ int dbUpdateStockPack(stockpack *sp) {
         if (rc != SQLITE_OK) goto error;
         if (sqlite3_step(stmt) != SQLITE_DONE) goto error;
     } else {
-        char *sql = "DELETE StockPack WHERE rowid=?";
+        char *sql = "DELETE FROM StockPack WHERE rowid=?";
         rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
         if (rc != SQLITE_OK) goto error;
-        rc = sqlite3_bind_int64(stmt,1,sp->quantity);
+        rc = sqlite3_bind_int64(stmt,1,sp->rowid);
         if (rc != SQLITE_OK) goto error;
         if (sqlite3_step(stmt) != SQLITE_DONE) goto error;
     }
