@@ -742,6 +742,8 @@ typedef struct stockpack {
  * list, NULL is returned. */
 stockpack *dbGetPortfolio(const char *listname, int *count) {
     int64_t listid = dbGetListID(listname,0);
+    if (listid == 0) return NULL;
+
     stockpack *packs = NULL;
     int rows = 0;
     sqlite3_stmt *stmt = NULL;
@@ -781,8 +783,15 @@ stockpack *dbGetPortfolio(const char *listname, int *count) {
             pack->daygain = value / 100 * daychange;
         }
         freeYahooData(yd);
+        rows++;
     }
     *count = rows;
+
+    /* Return NULL if the list exists but there are no associated packs. */
+    if (rows == 0) {
+        xfree(packs);
+        packs = NULL;
+    }
 
 error:
     sqlite3_finalize(stmt);
@@ -1378,12 +1387,44 @@ fmterr:
 }
 
 /* Handle show portfolio requests. */
-void botHandleShowPortfolioRequest(botRequest *br, sds *argv, int argc) {
+void botHandleShowPortfolioRequest(botRequest *br, sds *argv) {
     /* Remove the final "?" from the list name. */
     sds listname = sdsnewlen(argv[0],sdslen(argv[0])-1);
     sds reply = NULL;
+    int count;
+    stockpack *packs = dbGetPortfolio(listname,&count);
+    if (packs == NULL) {
+        reply = sdscatprintf(sdsempty(),
+            "There aren't buyed stocks associated with the list %s",listname);
+        goto cleanup;
+    }
 
-err:
+    /* Build the reply composed of all the stocks. */
+    reply = sdsnew("```\n");
+    for (int j = 0; j < count; j++) {
+        stockpack *pack = packs+j;
+        sds emoji = sdsempty();
+
+        /* One symbol for every 10% of change. */
+        double gp = fabs(pack->gainperc);
+        do {
+            emoji = sdscat(emoji, (pack->gainperc >= 0) ? "💚":"💔");
+            gp -= 10;
+        } while(gp >= 10);
+
+        reply = sdscatprintf(reply,"%-6s | %s%.2f (%s%.2f%%) %s\n",
+            pack->symbol,
+            (pack->gain >= 0) ? "+" : "",
+            pack->gain,
+            (pack->gainperc >= 0) ? "+" : "",
+            pack->gainperc,
+            emoji);
+        sdsfree(emoji);
+    }
+    reply = sdscat(reply,"```");
+
+cleanup:
+    xfree(packs);
     if (reply) botSendMessage(br->target,reply,0);
     sdsfree(reply);
     sdsfree(listname);
@@ -1403,7 +1444,7 @@ void *botHandleRequest(void *arg) {
         botHandleListRequest(br,argv,argc);
     } else if (argv[0][sdslen(argv[0])-1] == '?') {
         /* $list? */
-        botHandleShowPortfolioRequest(br,argv,argc);
+        botHandleShowPortfolioRequest(br,argv);
     } else if (argc == 1) {
         /* $AAPL */
         botHandlePriceRequest(br,argv[0]);
