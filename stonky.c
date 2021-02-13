@@ -727,6 +727,7 @@ sds *dbGetStocksFromList(const char *listname, int *numstocks) {
         symbols[rows++] = sym;
     }
     *numstocks = rows;
+    sqlite3_finalize(stmt);
     return symbols;
 
 error:
