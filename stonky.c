@@ -49,6 +49,8 @@
 #include "cJSON.h"
 #include "canvas.h"
 
+/* Note that C_OK is 1 and C_ERR is 0, so if functions return success
+ * it is possible to do things like: if (function()) {... do on success ...} */
 #define C_OK 1
 #define C_ERR 0
 #define UNUSED(V) ((void) V)
@@ -617,10 +619,11 @@ void dbClose(void) {
     dbHandle = NULL;
 }
 
-/* Return the ID of the specified list, creating it if it does not exist.
- * If 'nocreate' is true and the list does not exist, the function just
- * returns 0. On error, zero is returned. */
-int64_t dbGetListID(const char *listname, int nocreate) {
+/* Return the ID of the specified list.
+ * If 'create' is true and the list does not exist, the function creates it
+ * and returns the ID of the newly created list.
+ * On error, zero is returned. */
+int64_t dbGetListID(const char *listname, int create) {
     sqlite3_stmt *stmt = NULL;
     int rc;
     char *sql = "SELECT rowid FROM Lists WHERE name=? COLLATE NOCASE";
@@ -634,7 +637,7 @@ int64_t dbGetListID(const char *listname, int nocreate) {
     rc = sqlite3_step(stmt);
     if (rc == SQLITE_ROW) {
         listid = sqlite3_column_int64(stmt,0);
-    } else if (nocreate == 0) {
+    } else if (create) {
         /* We need to insert it. */
         sqlite3_finalize(stmt);
         sql = "INSERT INTO Lists VALUES(?)";
@@ -656,7 +659,7 @@ error:
  * The function returns 0 if the stock is not part of the list or if the
  * list does not exist at all. */
 int64_t dbGetStockID(const char *listname, const char *stock) {
-    int64_t listid = dbGetListID(listname,1);
+    int64_t listid = dbGetListID(listname,0);
     if (listid == 0) return 0;
 
     sqlite3_stmt *stmt = NULL;
@@ -689,7 +692,7 @@ error:
  * If dellist is true, and the removed stock has the effect of creating an
  * emtpy list, the list itself is removed. */
 int dbDelStockFromList(const char *listname, const char *symbol, int dellist) {
-    int64_t listid = dbGetListID(listname,1);
+    int64_t listid = dbGetListID(listname,0);
     if (listid == 0) return C_ERR;
 
     sqlite3_stmt *stmt = NULL;
@@ -720,7 +723,7 @@ error:
 /* Add the stock to the specified list. Create the list if it didn't exist
  * yet. Return the stock ID in the list, or zero on error. */
 int64_t dbAddStockToList(const char *listname, const char *symbol) {
-    int64_t listid = dbGetListID(listname,0);
+    int64_t listid = dbGetListID(listname,1);
     if (listid == 0) return 0;
 
     /* Check if the stock is already part of the list. */
@@ -747,17 +750,17 @@ error:
 
 /* Return the stocks in a list as an array of SDS strings and a count,
  * you can free the returned object with sdsfreesplitres().
- * If the list does not exist, zero is returned. */
+ * If the list does not exist, NULL is returned. */
 sds *dbGetStocksFromList(const char *listname, int *numstocks) {
     sqlite3_stmt *stmt = NULL;
     int rc;
     int rows = 0;
     sds *symbols = NULL;
-    char *sql = "SELECT symbol FROM ListStock WHERE listid=? COLLATE NOCASE";
+    char *sql = "SELECT symbol FROM ListStock WHERE listid=?";
 
     /* Get the ID of the specified list, if any. */
-    int64_t listid = dbGetListID(listname,1);
-    if (listid == 0) return C_ERR;
+    int64_t listid = dbGetListID(listname,0);
+    if (listid == 0) return NULL;
 
     /* Check if a list with such name already exists. */
     rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
@@ -777,6 +780,120 @@ error:
     sdsfreesplitres(symbols,rows);
     sqlite3_finalize(stmt);
     return NULL;
+}
+
+typedef struct stockpack {
+    int64_t rowid;
+    int64_t stockid;
+    int quantity;
+    double avgprice;
+} stockpack;
+
+/* Fetch the stockpack for the stockid in sp->stockid.
+ * If a stockpack is found C_OK is returned, and the 'sp' structure gets
+ * filled by reference. Otherwise if no stockpack was found, or in case
+ * of query errors, C_ERR is returned. */
+int dbGetStockPack(stockpack *sp) {
+    sqlite3_stmt *stmt = NULL;
+    int retval = C_ERR, rc;
+    char *sql = "SELECT rowid,quantity,avgprice FROM "
+                "StockPack WHERE liststockid=?";
+
+    /* Check if a list with such name already exists. */
+    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
+    if (rc != SQLITE_OK) goto error;
+    rc = sqlite3_bind_int64(stmt,1,sp->stockid);
+    if (rc != SQLITE_OK) goto error;
+    if (sqlite3_step(stmt) != SQLITE_ROW) goto error;
+    sp->rowid = sqlite3_column_int64(stmt,0);
+    sp->quantity = sqlite3_column_int64(stmt,1);
+    sp->avgprice = sqlite3_column_double(stmt,2);
+    retval = C_OK;
+
+error:
+    sqlite3_finalize(stmt);
+    return retval;
+}
+
+/* Update the stockpack according to its description in the 'sp'
+ * structure passed by pointer. If 'rowid' is 0, then we want a new
+ * stockpack with the specified quantity and stock ID to be added, otherwise
+ * the function will just update the old stockpack.
+ *
+ * Note that if a new stockpack is created, rowid is populated with its
+ * ID. */
+int dbUpdateStockPack(stockpack *sp) {
+    sqlite3_stmt *stmt = NULL;
+    int retval = C_ERR, rc;
+
+    if (sp->rowid == 0) {
+        char *sql = "INSERT INTO StockPack VALUES(?,?,?)";
+        rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
+        if (rc != SQLITE_OK) goto error;
+        rc = sqlite3_bind_int64(stmt,1,sp->stockid);
+        if (rc != SQLITE_OK) goto error;
+        rc = sqlite3_bind_int64(stmt,2,sp->quantity);
+        if (rc != SQLITE_OK) goto error;
+        rc = sqlite3_bind_double(stmt,3,sp->avgprice);
+        if (rc != SQLITE_OK) goto error;
+        if (sqlite3_step(stmt) != SQLITE_DONE) goto error;
+        sp->rowid = sqlite3_last_insert_rowid(dbHandle);
+    } else {
+        char *sql = "UPDATE StockPack SET quantity=?,avgprice=? "
+                    "WHERE rowid=?";
+        rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
+        if (rc != SQLITE_OK) goto error;
+        rc = sqlite3_bind_int64(stmt,1,sp->quantity);
+        if (rc != SQLITE_OK) goto error;
+        rc = sqlite3_bind_double(stmt,2,sp->avgprice);
+        if (rc != SQLITE_OK) goto error;
+        rc = sqlite3_bind_int64(stmt,3,sp->rowid);
+        if (rc != SQLITE_OK) goto error;
+        if (sqlite3_step(stmt) != SQLITE_DONE) goto error;
+    }
+    retval = C_OK;
+
+error:
+    sqlite3_finalize(stmt);
+    return retval;
+}
+
+
+/* Add a new stockpack for the specified symbol and into the specified list.
+ * Note that if a stock pack already exists for this stocks, the bot will
+ * merge the new pack with the old one, calculating the average price.
+ *
+ * If no price is given, the current price will be used.
+ * if the list does not exist it will be created.
+ * If the symbol is not yet in the list, it will be added.
+ *
+ * The new stockpack total quantity and amount is returned by
+ * filling 'spp' if not NULL.
+ *
+ * On success C_OK is returned, on error C_ERR. */
+int dbBuyStocks(const char *listname, const char *symbol, double price, int quantity, stockpack *spp) {
+    /* Create the list and its stock. */
+    int64_t listid = dbGetListID(listname,1);
+    if (listid == 0) return C_ERR;
+    int stockid = dbAddStockToList(listname,symbol);
+    if (stockid == 0) return C_ERR;
+
+    /* Check if a pack exists for this stock, in order to adjust
+     * quantity and price. */
+    stockpack sp;
+    sp.rowid = 0;
+    sp.stockid = stockid;
+    if (dbGetStockPack(&sp)) {
+        double totprice = (sp.avgprice * sp.quantity) + (price * quantity);
+        sp.quantity += quantity;
+        sp.avgprice = totprice / sp.quantity;
+    } else {
+        sp.quantity = quantity;
+        sp.avgprice = price;
+    }
+    int retval = dbUpdateStockPack(&sp);
+    if (spp && retval == C_OK) *spp = sp;
+    return retval;
 }
 
 /* =============================================================================
@@ -1124,14 +1241,58 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
             }
         }
         sdsfreesplitres(stocks,numstocks);
+    } else if (!strcasecmp(argv[1],"buy") && (argc == 3 || argc == 4)) {
+        /* $list: buy SYMBOL [100@price] */
+        int quantity = 1;
+        double price = 0;
+        sds symbol = argv[2];
+
+        /* Parse the quantity@price argument if available. */
+        if (argc == 4) {
+            sds details = sdsdup(argv[3]);
+            char *p = strchr(details,'@');
+            if (p) price = strtod(p+1,NULL);
+            quantity = atoi(details);
+            sdsfree(details);
+        }
+
+        /* Check that the symbol exists. */
+        ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
+        if (yd == NULL) {
+            reply = sdscatprintf(sdsempty(),
+                "Stock symbol %s not found", symbol);
+            goto fmterr;
+        }
+        if (price == 0) price = yd->reg;
+        freeYahooData(yd);
+
+        /* Ready to materialize the buy operation on the DB. */
+        stockpack sp;
+        if (dbBuyStocks(listname,symbol,price,quantity,&sp) == C_ERR) {
+            reply = sdsnew("Error adding the stock pack");
+        } else {
+            reply = sdscatprintf(sdsempty(),
+                "Now you have %d %s stocks at an average price of %.2f",
+                sp.quantity,symbol,sp.avgprice);
+        }
     } else {
         /* Otherwise we are in edit mode, with +... -... symbols. */
         for (int j = 1; j < argc; j++) {
-            if (argv[j][0] == '+')
+            if (argv[j][0] == '+') {
+                /* +SYMBOL */
                 dbAddStockToList(listname,argv[j]+1);
-            else
+            } else if (argv[j][0] == '-') {
+                /* -SYMBOL. */
                 dbDelStockFromList(listname,argv[j]+1,1);
+            } else if (argv[j][0] == '?') {
+                /* Do nothing, we want just the list of symbols. */
+            } else {
+                reply = sdsnew("Syntax error: use +AAPL -TWTR and so forth");
+                goto fmterr;
+            }
         }
+
+        /* Show the new composition of the list. */
         int numstocks;
         sds *stocks = dbGetStocksFromList(listname,&numstocks);
         if (stocks == NULL) {
@@ -1147,6 +1308,22 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
         }
         sdsfreesplitres(stocks,numstocks);
     }
+
+fmterr:
+    if (reply) botSendMessage(br->target,reply,0);
+    sdsfree(reply);
+    sdsfree(listname);
+}
+
+/* Handle show portfolio requests. */
+void botHandleShowPortfolioRequest(botRequest *br, sds *argv, int argc) {
+    /* Remove the final "?" from the list name. */
+    sds listname = sdsnewlen(argv[0],sdslen(argv[0])-1);
+    sds reply = NULL;
+
+    reply = sdsnew("Not yet implemented.");
+
+fmterr:
     if (reply) botSendMessage(br->target,reply,0);
     sdsfree(reply);
     sdsfree(listname);
@@ -1162,8 +1339,11 @@ void *botHandleRequest(void *arg) {
     sds *argv = sdssplitargs(br->request,&argc);
 
     if (argv[0][sdslen(argv[0])-1] == ':') {
-        /* :list [+... -...] */
+        /* $list: [+... -...] */
         botHandleListRequest(br,argv,argc);
+    } else if (argv[0][sdslen(argv[0])-1] == '?') {
+        /* $list? */
+        botHandleShowPortfolioRequest(br,argv,argc);
     } else if (argc == 1) {
         /* $AAPL */
         botHandlePriceRequest(br,argv[0]);
