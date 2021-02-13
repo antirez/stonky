@@ -585,8 +585,12 @@ sqlite3 *dbInit(int createdb) {
     if (createdb) {
         char *sql =
         "DROP TABLE IF EXISTS Cars;"
-        "CREATE TABLE IF NOT EXISTS Lists(Name TEXT);"
-        "CREATE TABLE IF NOT EXISTS ListStock(listid INT, Symbol TEXT);";
+        "CREATE TABLE IF NOT EXISTS Lists(Name TEXT COLLATE NOCASE);"
+        "CREATE TABLE IF NOT EXISTS ListStock(listid INT, "
+                                              "symbol TEXT COLLATE NOCASE);"
+        "CREATE TABLE IF NOT EXISTS StockPack(liststockid INT, "
+                                              "quantity INT, "
+                                              "avgprice REAL);";
 
         char *errmsg;
         int rc = sqlite3_exec(db, sql, 0, 0, &errmsg);
@@ -613,7 +617,7 @@ void dbClose(void) {
 int64_t dbGetListID(const char *listname, int nocreate) {
     sqlite3_stmt *stmt = NULL;
     int rc;
-    char *sql = "SELECT rowid FROM Lists WHERE name=?";
+    char *sql = "SELECT rowid FROM Lists WHERE name=? COLLATE NOCASE";
     int64_t listid = 0;
 
     /* Check if a list with such name already exists. */
@@ -642,6 +646,38 @@ error:
     return listid;
 }
 
+/* Return the ID of the specified stock in the specified list.
+ * The function returns 0 if the stock is not part of the list or if the
+ * list does not exist at all. */
+int64_t dbGetStockID(const char *listname, const char *stock) {
+    int64_t listid = dbGetListID(listname,1);
+    if (listid == 0) return 0;
+
+    sqlite3_stmt *stmt = NULL;
+    int rc;
+    char *sql = "SELECT rowid FROM ListStock WHERE listid=? AND symbol=? "
+                 "COLLATE NOCASE";
+    int64_t stockid = 0;
+
+    /* Check if a list with such name already exists. */
+    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
+    if (rc != SQLITE_OK) goto error;
+    rc = sqlite3_bind_int64(stmt,1,listid);
+    if (rc != SQLITE_OK) goto error;
+    rc = sqlite3_bind_text(stmt,2,stock,-1,NULL);
+    if (rc != SQLITE_OK) goto error;
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        stockid = sqlite3_column_int64(stmt,0);
+    } else {
+        stockid = 0;
+    }
+
+error:
+    sqlite3_finalize(stmt);
+    return stockid;
+}
+
 /* Remove a stock from the list, returning C_OK if the stock was
  * actually there, and was removed. Otherwise C_ERR is returned.
  * If dellist is true, and the removed stock has the effect of creating an
@@ -654,10 +690,12 @@ int dbDelStockFromList(const char *listname, const char *symbol, int dellist) {
     int rc;
     int retval = C_ERR;
 
-    const char *sql = "DELETE FROM ListStock WHERE listid=? AND symbol=?";
+    const char *sql = "DELETE FROM ListStock WHERE listid=? AND symbol=? "
+                      "COLLATE NOCASE";
     rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
     if (rc != SQLITE_OK) goto error;
     rc = sqlite3_bind_int64(stmt,1,listid);
+    if (rc != SQLITE_OK) goto error;
     rc = sqlite3_bind_text(stmt,2,symbol,-1,NULL);
     if (rc != SQLITE_OK) goto error;
     rc = sqlite3_step(stmt);
@@ -675,22 +713,21 @@ error:
 
 /* Add the stock to the specified list. Create the list if it didn't exist
  * yet. Return the stock ID in the list, or zero on error. */
-int dbAddStockToList(const char *listname, const char *symbol) {
+int64_t dbAddStockToList(const char *listname, const char *symbol) {
     int64_t listid = dbGetListID(listname,0);
     if (listid == 0) return 0;
 
-    sqlite3_stmt *stmt = NULL;
+    /* Check if the stock is already part of the list. */
+    int64_t stockid = dbGetStockID(listname,symbol);
+    if (stockid) return stockid;
+
     int rc;
-    int64_t stockid = 0;
-
-    /* Remove the stock from the list in case it is already there. This
-     * way we avoid adding it multiple times. */
-    dbDelStockFromList(listname,symbol,0);
-
+    sqlite3_stmt *stmt = NULL;
     const char *sql = "INSERT INTO ListStock VALUES(?,?)";
     rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
     if (rc != SQLITE_OK) goto error;
     rc = sqlite3_bind_int64(stmt,1,listid);
+    if (rc != SQLITE_OK) goto error;
     rc = sqlite3_bind_text(stmt,2,symbol,-1,NULL);
     if (rc != SQLITE_OK) goto error;
     rc = sqlite3_step(stmt);
@@ -710,7 +747,7 @@ sds *dbGetStocksFromList(const char *listname, int *numstocks) {
     int rc;
     int rows = 0;
     sds *symbols = NULL;
-    char *sql = "SELECT symbol FROM ListStock WHERE listid=?";
+    char *sql = "SELECT symbol FROM ListStock WHERE listid=? COLLATE NOCASE";
 
     /* Get the ID of the specified list, if any. */
     int64_t listid = dbGetListID(listname,1);
