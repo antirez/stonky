@@ -600,6 +600,13 @@ sqlite3 *dbInit(int createdb) {
     return db;
 }
 
+/* Should be called every time a thread exists, so that if the thread has
+ * an SQLite thread-local handle, it gets closed. */
+void dbClose(void) {
+    if (dbHandle) sqlite3_close(dbHandle);
+    dbHandle = NULL;
+}
+
 /* Return the ID of the specified list, creating it if it does not exist.
  * If 'nocreate' is true and the list does not exist, the function just
  * returns 0. On error, zero is returned. */
@@ -1131,6 +1138,7 @@ void *botHandleRequest(void *arg) {
 
     freeBotRequest(br);
     sdsfreesplitres(argv,argc);
+    dbClose();
     return NULL;
 }
 
@@ -1303,6 +1311,7 @@ void *scanStocksThread(void *arg) {
         }
         sleep(1);
     }
+    dbClose();
     return NULL;
 }
 
