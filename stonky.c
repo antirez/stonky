@@ -734,6 +734,26 @@ typedef struct stockpack {
     double value; /* Total value of this stock at the current price. */
 } stockpack;
 
+/* Populate the fields of the stockpack that can be calculated fetching
+ * info from Yahoo. On success C_OK is returned, otherwise C_ERR. */
+int populateStockPackInfo(stockpack *pack, const char *symbol) {
+    ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
+    if (yd) {
+        double daychange = strtod(yd->regchange,NULL);
+        double payed = pack->quantity * pack->avgprice;
+        double value = pack->quantity * yd->reg;
+        pack->value = value;
+        pack->gain = value-payed;
+        pack->gainperc = (value/payed-1)*100;
+        pack->daygainperc = daychange;
+        pack->daygain = value / 100 * daychange;
+        freeYahooData(yd);
+        return C_OK;
+    } else {
+        return C_ERR;
+    }
+}
+
 /* Return the list of portfolio stocks associated with the specified
  * list name, as an array of '*count' stockpack items. The caller
  * must be free the returned value with xfree().
@@ -771,18 +791,7 @@ stockpack *dbGetPortfolio(const char *listname, int *count) {
         pack->quantity = sqlite3_column_int64(stmt,1);
         pack->avgprice = sqlite3_column_double(stmt,2);
         /* Compute the gain. */
-        ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
-        if (yd) {
-            double daychange = strtod(yd->regchange,NULL);
-            double payed = pack->quantity * pack->avgprice;
-            double value = pack->quantity * yd->reg;
-            pack->value = value;
-            pack->gain = value-payed;
-            pack->gainperc = (value/payed-1)*100;
-            pack->daygainperc = daychange;
-            pack->daygain = value / 100 * daychange;
-        }
-        freeYahooData(yd);
+        populateStockPackInfo(pack,symbol);
         rows++;
     }
     *count = rows;
@@ -891,8 +900,9 @@ error:
  * stockpack with the specified quantity and stock ID to be added, otherwise
  * the function will just update the old stockpack.
  *
- * Note that if a new stockpack is created, rowid is populated with its
- * ID. */
+ * If a new stockpack is created, rowid is populated with its ID.
+ *
+ * If sp->quantity is zero, the stockpack is deleted from the DB. */
 int dbUpdateStockPack(stockpack *sp) {
     sqlite3_stmt *stmt = NULL;
     int retval = C_ERR, rc;
@@ -909,7 +919,7 @@ int dbUpdateStockPack(stockpack *sp) {
         if (rc != SQLITE_OK) goto error;
         if (sqlite3_step(stmt) != SQLITE_DONE) goto error;
         sp->rowid = sqlite3_last_insert_rowid(dbHandle);
-    } else {
+    } else if (sp->quantity > 0) {
         char *sql = "UPDATE StockPack SET quantity=?,avgprice=? "
                     "WHERE rowid=?";
         rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
@@ -919,6 +929,13 @@ int dbUpdateStockPack(stockpack *sp) {
         rc = sqlite3_bind_double(stmt,2,sp->avgprice);
         if (rc != SQLITE_OK) goto error;
         rc = sqlite3_bind_int64(stmt,3,sp->rowid);
+        if (rc != SQLITE_OK) goto error;
+        if (sqlite3_step(stmt) != SQLITE_DONE) goto error;
+    } else {
+        char *sql = "DELETE StockPack WHERE rowid=?";
+        rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
+        if (rc != SQLITE_OK) goto error;
+        rc = sqlite3_bind_int64(stmt,1,sp->quantity);
         if (rc != SQLITE_OK) goto error;
         if (sqlite3_step(stmt) != SQLITE_DONE) goto error;
     }
@@ -965,6 +982,42 @@ int dbBuyStocks(const char *listname, const char *symbol, double price, int quan
     int retval = dbUpdateStockPack(&sp);
     if (spp && retval == C_OK) *spp = sp;
     return retval;
+}
+
+/* Remove the specified amount of stocks from the specified stockpack associated
+ * with the specified list. If quantity is 0 it means remove all the stocks.
+ * On success C_OK is returned, on error (or if the list does not exit)
+ * C_ERR is returned.
+ *
+ * If you ask to sell more stocks than the ones you have in the pack,
+ * then the operation is not performed, C_ERR is returned, and this is signaled
+ * by setting *ssp->quantity to a negative number.
+ *
+ * On success the *ssp structure is filled with the condition of the stock
+ * *after* the selling. */
+int dbSellStocks(const char *listname, const char *symbol, int quantity, stockpack *sp) {
+    sp->quantity = 0; /* Whatever happens, don't return a negative value
+                         if not on purpose. */
+
+    /* Lookup the stock ID in that list. */
+    int64_t stockid = dbGetStockID(listname,symbol);
+    if (stockid == 0) {
+        sp->quantity = -quantity;
+        return C_ERR;
+    }
+
+    /* Fetch the stock. */
+    sp->stockid = stockid;
+    if (dbGetStockPack(sp) == C_ERR) {
+        sp->quantity = -quantity;
+        return C_ERR;
+    }
+    if (quantity == 0) quantity = sp->quantity;
+
+    /* Finally update. */
+    sp->quantity -= quantity;
+    if (sp->quantity < 0) return C_ERR; /* Not enough stocks. */
+    return dbUpdateStockPack(sp);
 }
 
 /* =============================================================================
@@ -1346,6 +1399,35 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
                 "Now you have %d %s stocks at an average price of %.2f",
                 sp.quantity,symbol,sp.avgprice);
         }
+    } else if (!strcasecmp(argv[1],"sell") && (argc == 3 || argc == 4)) {
+        /* $list: sell [quantity] */
+        int quantity = 0; /* All the stocks. */
+        sds symbol = argv[2];
+
+        /* Parse the quantity argument if available. */
+        if (argc == 4) quantity = atoi(argv[3]);
+
+        /* Check that the symbol exists. */
+        ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
+        if (yd == NULL) {
+            reply = sdscatprintf(sdsempty(),
+                "Stock symbol %s not found", symbol);
+            goto fmterr;
+        }
+        freeYahooData(yd);
+
+        stockpack sp;
+        if (dbSellStocks(listname,symbol,quantity,&sp) == C_ERR) {
+            if (sp.quantity < 0) {
+                reply = sdsnew("You don't have enough stocks to sell");
+            } else {
+                reply = sdsnew("Error removing from the stock pack");
+            }
+        } else {
+            reply = sdscatprintf(sdsempty(),
+                "You are left with %d %s stocks at an average price of %.2f",
+                sp.quantity,symbol,sp.avgprice);
+        }
     } else {
         /* Otherwise we are in edit mode, with +... -... symbols. */
         for (int j = 1; j < argc; j++) {
@@ -1412,8 +1494,9 @@ void botHandleShowPortfolioRequest(botRequest *br, sds *argv) {
             gp -= 10;
         } while(gp >= 10);
 
-        reply = sdscatprintf(reply,"%-6s | %s%.2f (%s%.2f%%) %s\n",
+        reply = sdscatprintf(reply,"%-5s | %-3d | %s%.2f (%s%.2f%%) %s\n",
             pack->symbol,
+            pack->quantity,
             (pack->gain >= 0) ? "+" : "",
             pack->gain,
             (pack->gainperc >= 0) ? "+" : "",
