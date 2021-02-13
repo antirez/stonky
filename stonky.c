@@ -745,8 +745,7 @@ error:
  *
  * If flag is 0 (or STONKY_NOFLAGS), the function runs normally.
  * If flag is STONKY_SHORT, a formatting using less space is used. */
-sds sdsCatPriceRequest(sds s, sds symbol, int flags) {
-    ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
+sds sdsCatPriceRequest(sds s, sds symbol, ydata *yd, int flags) {
     if (yd == NULL) {
         s = sdscatprintf(s,
             (flags & STONKY_SHORT) ? "Can't find data for '%s'" :
@@ -804,13 +803,14 @@ sds sdsCatPriceRequest(sds s, sds symbol, int flags) {
             yd->post, yd->csym, yd->postchange[0] == '-' ? "" : "+",
             yd->postchange);
     }
-    freeYahooData(yd);
     return s;
 }
 
 /* Handle bot price requests in the form: $AAPL. */
 void botHandlePriceRequest(botRequest *br, sds symbol) {
-    sds reply = sdsCatPriceRequest(sdsempty(),symbol,0);
+    ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
+    sds reply = sdsCatPriceRequest(sdsempty(),symbol,yd,0);
+    freeYahooData(yd);
     botSendMessage(br->target,reply,0);
     sdsfree(reply);
 }
@@ -1074,7 +1074,9 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
         } else {
             reply = sdscatprintf(sdsempty(),"Prices for list %s:\n", listname);
             for (int j = 0; j < numstocks; j++) {
-                reply = sdsCatPriceRequest(reply,stocks[j],STONKY_SHORT);
+                ydata *yd = getYahooData(YDATA_QUOTE,stocks[j],NULL,NULL);
+                reply = sdsCatPriceRequest(reply,stocks[j],yd,STONKY_SHORT);
+                freeYahooData(yd);
                 reply = sdscat(reply,"\n");
             }
         }
