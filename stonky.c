@@ -584,13 +584,19 @@ sqlite3 *dbInit(int createdb) {
 
     if (createdb) {
         char *sql =
-        "DROP TABLE IF EXISTS Cars;"
-        "CREATE TABLE IF NOT EXISTS Lists(Name TEXT COLLATE NOCASE);"
-        "CREATE TABLE IF NOT EXISTS ListStock(listid INT, "
-                                              "symbol TEXT COLLATE NOCASE);"
-        "CREATE TABLE IF NOT EXISTS StockPack(liststockid INT, "
-                                              "quantity INT, "
-                                              "avgprice REAL);";
+    "CREATE TABLE IF NOT EXISTS Lists(name TEXT COLLATE NOCASE);"
+    "CREATE INDEX IF NOT EXISTS idx_lists_name ON Lists(name);"
+
+    "CREATE TABLE IF NOT EXISTS ListStock(listid INT, "
+                                          "symbol TEXT COLLATE NOCASE);"
+    "CREATE INDEX IF NOT EXISTS idx_liststock_listid ON ListStock(listid);"
+    "CREATE INDEX IF NOT EXISTS idx_liststock_ls ON ListStock(listid,symbol);"
+
+    "CREATE TABLE IF NOT EXISTS StockPack(liststockid INT, "
+                                          "quantity INT, "
+                                          "avgprice REAL);"
+    "CREATE INDEX IF NOT EXISTS idx_stockpack_lsid ON StockPack(liststockid);"
+    ;
 
         char *errmsg;
         int rc = sqlite3_exec(db, sql, 0, 0, &errmsg);
