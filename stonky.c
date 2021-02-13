@@ -720,6 +720,75 @@ error:
     return retval;
 }
 
+/* This represents buyed stocks associated with a symbol in a given list.
+ * It is used by multiple functions in order to manipulate portfolios. */
+typedef struct stockpack {
+    int64_t rowid;
+    int64_t stockid;
+    int quantity;
+    double avgprice;
+    /* Only filled by dbGetPortfolio. */
+    char symbol[64];
+    double gain, gainperc;
+    double daygain, daygainperc;
+    double value; /* Total value of this stock at the current price. */
+} stockpack;
+
+/* Return the list of portfolio stocks associated with the specified
+ * list name, as an array of '*count' stockpack items. The caller
+ * must be free the returned value with xfree().
+ *
+ * If there is no such list, or no stockpack at all associated with the
+ * list, NULL is returned. */
+stockpack *dbGetPortfolio(const char *listname, int *count) {
+    int64_t listid = dbGetListID(listname,0);
+    stockpack *packs = NULL;
+    int rows = 0;
+    sqlite3_stmt *stmt = NULL;
+    int rc;
+    char *sql = "SELECT symbol,quantity,avgprice FROM ListStock "
+                "CROSS JOIN StockPack On "
+                "ListStock.rowid = StockPack.liststockid "
+                "WHERE ListStock.listid=? ORDER BY symbol";
+
+    /* Check if a list with such name already exists. */
+    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
+    if (rc != SQLITE_OK) goto error;
+    rc = sqlite3_bind_int64(stmt,1,listid);
+    if (rc != SQLITE_OK) goto error;
+
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        packs = realloc(packs,sizeof(stockpack)*(rows+1));
+        stockpack *pack = packs+rows;
+        memset(pack,0,sizeof(stockpack));
+        char *symbol = (char*)sqlite3_column_text(stmt,0);
+        size_t len = strlen((char*)symbol);
+        if (len >= sizeof(pack->symbol)) len = sizeof(packs->symbol)-1;
+        memcpy(pack->symbol,symbol,len);
+        pack->symbol[len] = 0;
+        pack->quantity = sqlite3_column_int64(stmt,1);
+        pack->avgprice = sqlite3_column_double(stmt,2);
+        /* Compute the gain. */
+        ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
+        if (yd) {
+            double daychange = strtod(yd->regchange,NULL);
+            double payed = pack->quantity * pack->avgprice;
+            double value = pack->quantity * yd->reg;
+            pack->value = value;
+            pack->gain = value-payed;
+            pack->gainperc = (value/payed-1)*100;
+            pack->daygainperc = daychange;
+            pack->daygain = value / 100 * daychange;
+        }
+        freeYahooData(yd);
+    }
+    *count = rows;
+
+error:
+    sqlite3_finalize(stmt);
+    return packs;
+}
+
 /* Add the stock to the specified list. Create the list if it didn't exist
  * yet. Return the stock ID in the list, or zero on error. */
 int64_t dbAddStockToList(const char *listname, const char *symbol) {
@@ -781,13 +850,6 @@ error:
     sqlite3_finalize(stmt);
     return NULL;
 }
-
-typedef struct stockpack {
-    int64_t rowid;
-    int64_t stockid;
-    int quantity;
-    double avgprice;
-} stockpack;
 
 /* Fetch the stockpack for the stockid in sp->stockid.
  * If a stockpack is found C_OK is returned, and the 'sp' structure gets
@@ -1321,9 +1383,7 @@ void botHandleShowPortfolioRequest(botRequest *br, sds *argv, int argc) {
     sds listname = sdsnewlen(argv[0],sdslen(argv[0])-1);
     sds reply = NULL;
 
-    reply = sdsnew("Not yet implemented.");
-
-fmterr:
+err:
     if (reply) botSendMessage(br->target,reply,0);
     sdsfree(reply);
     sdsfree(listname);
