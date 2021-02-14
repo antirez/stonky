@@ -1469,9 +1469,15 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
                 reply = sdsnew("Error removing from the stock pack");
             }
         } else {
-            reply = sdscatprintf(sdsempty(),
-                "You are left with %d %s stocks at an average price of %.2f",
-                sp.quantity,symbol,sp.avgprice);
+            if (sp.quantity != 0) {
+                reply = sdscatprintf(sdsempty(),
+                    "You are left with %d %s stocks at an average "
+                    "price of %.2f",
+                    sp.quantity,symbol,sp.avgprice);
+            } else {
+                reply = sdscatprintf(sdsempty(),
+                    "You no longer own %s stocks",symbol);
+            }
         }
     } else {
         /* Otherwise we are in edit mode, with +... -... symbols. */

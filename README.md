@@ -40,6 +40,7 @@ a list, then query the list to have all the prices with a single message:
 
     $mylist: +VMW +AAPL +T -KO  -- Modify the list adding/removing stocks.
     $mylist:                    -- Ask prices of stocks in a given list.
+    $mylist: ?                  -- Just show the stocks in the list.
 
 ## Portfolio support
 
