@@ -1750,7 +1750,6 @@ void *scanStocksThread(void *arg) {
 
         /* Fetch 5y of data. Abort if we have less than 250 prices. */
         ydata *yd = getYahooData(YDATA_TS,symbol,"5y","1d");
-        double five_years_min = yd->ts_min;
         if (yd == NULL || yd->ts_len < 250) {
             freeYahooData(yd);
             continue;
@@ -1770,6 +1769,10 @@ void *scanStocksThread(void *arg) {
         computeMontecarlo(yd,50,1000,5,&mcshort);
         computeMontecarlo(yd,20,1000,5,&mcvs);
         computeMontecarlo(yd,10,1000,1,&mcday);
+
+        /* Cache the stock data we want to use later, then free the
+         * API data. */
+        double five_years_min = yd->ts_min;
         freeYahooData(yd);
 
         int showstats = debugMode ? 1 : 0;
