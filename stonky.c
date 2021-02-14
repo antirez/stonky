@@ -728,6 +728,7 @@ int dbDelStockFromList(const char *listname, const char *symbol, int dellist) {
     if (rc != SQLITE_DONE) goto error;
     retval = C_OK;
 
+    /* Delete the list if is now orphaned. */
     if (dellist && dbGetListCount(listname) == 0) {
         const char *sql = "DELETE FROM Lists WHERE name=?";
         sqlite3_finalize(stmt);
@@ -738,6 +739,17 @@ int dbDelStockFromList(const char *listname, const char *symbol, int dellist) {
         rc = sqlite3_step(stmt);
         if (rc != SQLITE_DONE) goto error;
     }
+
+    /* Finally remove the packs associated with this item in the list. */
+    sql = "DELETE FROM StockPack WHERE rowid=?";
+    sqlite3_finalize(stmt);
+    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
+    if (rc != SQLITE_OK) goto error;
+    rc = sqlite3_bind_int64(stmt,1,stockid);
+    if (rc != SQLITE_OK) goto error;
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) goto error;
+    retval = C_OK;
 
 error:
     sqlite3_finalize(stmt);
