@@ -1736,12 +1736,21 @@ void *scanStocksThread(void *arg) {
     dbHandle = dbInit(0);
     int j = 0;
 
+#if 0 /* Debugging. */
+    Symbols[0] = "SE";
+    Symbols[1] = "AAPL";
+    Symbols[2] = "SHOP";
+    Symbols[3] = "AMZN";
+    NumSymbols = 4;
+#endif
+
     while(1) {
         sds symbol = Symbols[j % NumSymbols];
         j++;
 
         /* Fetch 5y of data. Abort if we have less than 250 prices. */
         ydata *yd = getYahooData(YDATA_TS,symbol,"5y","1d");
+        double five_years_min = yd->ts_min;
         if (yd == NULL || yd->ts_len < 250) {
             freeYahooData(yd);
             continue;
@@ -1765,8 +1774,8 @@ void *scanStocksThread(void *arg) {
 
         int showstats = debugMode ? 1 : 0;
         if (verboseMode)
-            printf("Scanning %s: %.2f -> %.2f -> %.2f -> %.2f "
-                   "-> %.2f(+-%.2f%%)\n", symbol,
+            printf("Scanning %s: VL%.2f -> L%.2f -> S%.2f -> VS%.2f "
+                   "-> D%.2f(+-%.2f%%)\n", symbol,
                 mcvl.gain, mclong.gain, mcshort.gain, mcvs.gain, mcday.gain,
                 mcday.absdiffper);
 
@@ -1780,14 +1789,17 @@ void *scanStocksThread(void *arg) {
             printf("tothemoon: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("tothemoon", symbol);
             showstats=1;
-        } else if (mclong.gain < mcshort.gain &&
-            mcshort.gain <  mcvs.gain &&
-            mcvl.gain > 1.5 &&
-            mclong.gain > 3 &&
-            mcshort.gain > 4 &&
-            mcvs.gain > 5 &&
-            mcday.gain > 1.5 &&
-            mcday.absdiffper < 100)
+        } else if (
+            mcvl.gain < mclong.gain &&
+            mclong.gain < mcshort.gain &&
+            mcshort.gain < mcvs.gain &&
+            mcvl.gain > 0.5 &&
+            mclong.gain > 0.5 &&
+            mcshort.gain > 3 &&
+            mcvs.gain > 4 &&
+            mcday.gain > 1 &&
+            mcday.absdiffper < 100 &&
+            five_years_min > 5)
         {
             printf("evenbetter: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("evenbetter", symbol);
