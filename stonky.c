@@ -59,6 +59,7 @@
 #define STONKY_NOFLAGS 0        /* No special flags. */
 #define STONKY_SHORT (1<<0)     /* Use short form for some output. */
 
+int autolistsMode = 1; /* Scan to populate auto lists. */
 int debugMode = 0; /* If true enables debugging info (--debug option). */
 int verboseMode = 0; /* If true enables verbose info (--verbose && --debug) */
 char *dbFile = "/tmp/stonky.sqlite";    /* Change with --dbfile. */
@@ -1278,7 +1279,11 @@ void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
         double sell_price = data[sellday];
 
         /* Sometimes Yahoo prices are null. Don't use bad data. */
-        if (buy_price == 0 || sell_price == 0) continue;
+        if (buy_price == 0 || sell_price == 0) {
+            gains[j] = 0;
+            total_interval += sellday-buyday;
+            continue;
+        }
 
         double gain = (sell_price-buy_price)/buy_price*100;
         gains[j] = gain;
@@ -1788,9 +1793,12 @@ void *scanStocksThread(void *arg) {
 /* Start background threads continuously doing certain tasks. */
 void startBackgroundTasks(void) {
     pthread_t tid;
-    if (pthread_create(&tid,NULL,scanStocksThread,NULL) != 0) {
-        printf("Can't create the thread to scan stocks on the background\n");
-        exit(1);
+    if (Symbols && autolistsMode) {
+        if (pthread_create(&tid,NULL,scanStocksThread,NULL) != 0) {
+            printf("Can't create the thread to scan stocks "
+                   "on the background\n");
+            exit(1);
+        }
     }
 }
 
@@ -1843,13 +1851,16 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[j],"--debug")) {
             debugMode = 1;
             verboseMode = 1;
+        } else if (!strcmp(argv[j],"--noautolists")) {
+            autolistsMode = 0;
         } else if (!strcmp(argv[j],"--verbose")) {
             verboseMode = 1;
         } else if (!strcmp(argv[j],"--apikey") && morearg) {
             BotApiKey = sdsnew(argv[++j]);
         } else {
             printf(
-            "Usage: %s [--apikey <apikey>] [--debug] [--verbose]\n",argv[0]);
+            "Usage: %s [--apikey <apikey>] [--debug] [--verbose] "
+            "[--noautolists]\n",argv[0]);
             exit(1);
         }
     }
@@ -1868,7 +1879,7 @@ int main(int argc, char **argv) {
     cJSON_Hooks jh = {.malloc_fn = xmalloc, .free_fn = xfree};
     cJSON_InitHooks(&jh);
     loadSymbols();
-    if (Symbols) startBackgroundTasks();
+    startBackgroundTasks();
 
     /* Enter the infinite loop handling the bot. */
     botMain();
