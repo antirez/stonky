@@ -757,7 +757,7 @@ error:
     return retval;
 }
 
-/* This represents buyed stocks associated with a symbol in a given list.
+/* This represents bought stocks associated with a symbol in a given list.
  * It is used by multiple functions in order to manipulate portfolios. */
 typedef struct stockpack {
     int64_t rowid;
@@ -1522,7 +1522,7 @@ void botHandleShowPortfolioRequest(botRequest *br, sds *argv) {
     stockpack *packs = dbGetPortfolio(listname,&count);
     if (packs == NULL) {
         reply = sdscatprintf(sdsempty(),
-            "There aren't buyed stocks associated with the list %s",listname);
+            "There aren't bought stocks associated with the list %s",listname);
         goto cleanup;
     }
 

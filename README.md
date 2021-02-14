@@ -55,7 +55,7 @@ can see the stocks in this list by writing simply:
 
     $tothemoon:
 
-In the channel where the bot exists or directly to the bot itself as a
+In the channels where the bot is admin or directly to the bot itself as a
 private message.
 
 ## Output examples
