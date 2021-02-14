@@ -1270,12 +1270,16 @@ void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
             maxtries = 10;
             do {
                 buyday = rand() % (range-period);
-            } while (data[buyday] == 0 && maxtries--);
-            sellday = buyday+period;
+                sellday = buyday+period;
+            } while (data[buyday] == 0 && data[sellday] == 0 && maxtries--);
         }
 
         double buy_price = data[buyday];
         double sell_price = data[sellday];
+
+        /* Sometimes Yahoo prices are null. Don't use bad data. */
+        if (buy_price == 0 || sell_price == 0) continue;
+
         double gain = (sell_price-buy_price)/buy_price*100;
         gains[j] = gain;
         if (debugMode) {
@@ -1627,7 +1631,7 @@ int64_t botProcessUpdates(int64_t offset, int timeout) {
         time_t timestamp = date->valuedouble;
         cJSON *text = cJSON_Select(update,".message.text:s");
         if (text == NULL) continue;
-        if (debugMode) printf(".message.text: %s\n", text->valuestring);
+        if (verboseMode) printf(".message.text: %s\n", text->valuestring);
 
         /* Sanity check the request before starting the thread:
          * validate that is a request that is really targeting our bot. */
@@ -1706,8 +1710,6 @@ void *scanStocksThread(void *arg) {
         sds symbol = Symbols[j % NumSymbols];
         j++;
 
-        if (debugMode) printf("Background scanning %s\n", symbol);
-
         /* Fetch 5y of data. Abort if we have less than 250 prices. */
         ydata *yd = getYahooData(YDATA_TS,symbol,"5y","1d");
         if (yd == NULL || yd->ts_len < 250) {
@@ -1730,6 +1732,11 @@ void *scanStocksThread(void *arg) {
         computeMontecarlo(yd,10,1000,1,&mcday);
         freeYahooData(yd);
 
+        int showstats = debugMode ? 1 : 0;
+        if (verboseMode)
+            printf("Scanning %s: %f -> %f -> %f\n", symbol,
+                mclong.gain, mcshort.gain, mcvs.gain);
+
         if (mclong.gain < mcshort.gain &&
             mcshort.gain <  mcvs.gain &&
             mcvs.gain > 8 &&
@@ -1737,24 +1744,41 @@ void *scanStocksThread(void *arg) {
             mcday.gain > 1 &&
             mcday.absdiffper < 100)
         {
-            if (verboseMode) {
-                printf("%d/%d %s:\n"
-                       "  %f (+-%f) [%f/%f] ->\n"
-                       "  %f (+-%f) [%f/%f] ->\n"
-                       "  %f (+-%f) [%f/%f]\n"
-                       "D %f (+-%f %f%%) [%f/%f]\n",
-                    j,NumSymbols,symbol,
-                    mclong.gain, mclong.absdiff, mclong.mingain,
-                    mclong.maxgain, mcshort.gain, mcshort.absdiff,
-                    mcshort.mingain, mcshort.maxgain, mcvs.gain,
-                    mcvs.absdiff, mcvs.mingain, mcvs.maxgain, mcday.gain,
-                    mcday.absdiff, mcday.absdiffper, mcday.mingain,
-                    mcday.maxgain);
-            }
+            printf("tothemoon: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("tothemoon", symbol);
+            showstats=1;
+        } else if (mclong.gain < mcshort.gain &&
+            mcshort.gain <  mcvs.gain &&
+            mclong.gain > 5 &&
+            mcshort.gain > 5 &&
+            mcvs.gain > 5 &&
+            mcday.gain > 1 &&
+            mcday.absdiffper < 100)
+        {
+            printf("evenbetter: %d/%d %s\n",j,NumSymbols,symbol);
+            dbAddStockToList("evenbetter", symbol);
+            showstats=1;
         } else {
             dbDelStockFromList("tothemoon", symbol, 0);
+            dbDelStockFromList("evenbetter", symbol, 0);
         }
+
+        if (showstats) {
+            printf("%d/%d %s:\n"
+                   "L  %f (+-%f %f%%) [%f/%f] ->\n"
+                   "S  %f (+-%f %f%%) [%f/%f] ->\n"
+                   "VS %f (+-%f %f%%) [%f/%f]\n"
+                   "D  %f (+-%f %f%%) [%f/%f]\n",
+                j,NumSymbols,symbol,
+                mclong.gain, mclong.absdiff, mclong.absdiffper,
+                mclong.mingain, mclong.maxgain, mcshort.gain,
+                mcshort.absdiff, mcshort.absdiffper,
+                mcshort.mingain, mcshort.maxgain, mcvs.gain,
+                mcvs.absdiff, mcvs.absdiffper, mcvs.mingain,
+                mcvs.maxgain, mcday.gain, mcday.absdiff, mcday.absdiffper,
+                mcday.mingain, mcday.maxgain);
+        }
+
         sleep(1);
     }
     dbClose();
