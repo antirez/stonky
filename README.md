@@ -41,22 +41,70 @@ a list, then query the list to have all the prices with a single message:
     $mylist: +VMW +AAPL +T -KO  -- Modify the list adding/removing stocks.
     $mylist:                    -- Ask prices of stocks in a given list.
 
+## Portfolio support
+
+Every list can be used as a portfolio for paper trading (or just to reflect
+your real portfolio of stocks). For every stock it is possible to buy or
+sell stocks, optionally specifying the amount and price. For instance to
+add 50 AAPL stocks bought at an average price of 130.57 write:
+
+    $myportfolio: buy AAPL 50@130.57
+
+If just the quantity is specified, the current stock price will be used:
+
+    $myportfolio: buy AAPL 50
+
+If only the stock name is specified, just a single stock is bought, using
+the current market price:
+
+    $myportfolio: buy AAPL
+
+The bot tracks the average price of your purchases, this is an example
+of a chat with the bot:
+
+    me>  $myportfolio: buy AAPL 50@120
+    bot> Now you have 50 AAPL stocks at an average price of 120.00
+    me>  $myportfolio: buy AAPL 30@75.40
+    bot> Now you have 80 AAPL stocks at an average price of 103.28
+
+You can see the list of stocks in your portfolio writing `$listname?`.
+For example:
+
+    me>  $myportfolio?
+    bot> AAPL  | 80  | +2567.60 (+31.08%) 💚💚💚
+
+The bot will put a green <3 for every 10% gain, a red one for every 10% loss.
+
+Finally you can sell stocks:
+
+    me>  $myportfolio: sell AAPL 10
+    bot> You are left with 70 AAPL stocks at an average price of 103.28
+    me>  $myportfolio: sell AAPL
+    bot> You no longer own AAPL stocks
+
+As you can see, selling without specifying the quantity will just sell
+all the stocks.
+
 ## Background analysis of stocks
 
 If the file `marketdata/symbols.txt` exists in the bot working directory,
 and contains a list of stock symbols (it is included in the default
 distribution, so the file exists unless you remove it intentionally), the
 bot starts continuously analyzing the listed stocks, one per second, looking
-for stocks that performed relatively poorly in the past but that are showing
-to have great momentum recently.
+for stocks that performed in specific ways.
 
-Such stocks are put into a list that is handled by the bot itself. You
+Such stocks are put into lists that are handled by the bot itself. You
 can see the stocks in this list by writing simply:
 
     $tothemoon:
 
 In the channels where the bot is admin or directly to the bot itself as a
 private message.
+
+The bot handles the following lists:
+
+* The `tothemoon` list contains stocks that performed poorly in the past, but now for some reason are showing to have a massive momentum.
+* The `evenbetter` list contains stocks that are very strong performers in the past, and now are performing even better.
 
 ## Output examples
 
