@@ -1579,7 +1579,7 @@ void *botHandleRequest(void *arg) {
     } else if (argv[0][sdslen(argv[0])-1] == '?') {
         /* $list? */
         botHandleShowPortfolioRequest(br,argv);
-    } else if (argc == 1) {
+    } else if (argc == 1 && strcasecmp(argv[0],"help")) {
         /* $AAPL */
         botHandlePriceRequest(br,argv[0]);
     } else if (argc == 2 && sdslen(argv[1]) == 2 &&
@@ -1592,6 +1592,25 @@ void *botHandleRequest(void *arg) {
     {
         /* $AAPL mc | montecarlo [options] */
         botHandleMontecarloRequest(br,argv[0],argv+1,argc-1);
+    } else if (argc >= 1 && !strcasecmp(argv[0],"help")) {
+        /* $HELP */
+        botSendMessage(br->target,
+"```\n"
+"$AAPL                    | Show price for AAPL.\n"
+"$AAPL 1d|5d|1m|6m|1y     | Show AAPL price chart for period\n"
+"$mylist: +VMW +AAPL -KO  | Modify the list.\n"
+"$mylist:                 | Ask prices of whole list.\n"
+"$mylist: ?               | Show stocks in the list.\n"
+"$mylist: mc              | Montecarlo simulation.\n"
+"$mylist: mc range 60     | Specify Montecarlo range.\n"
+"$mylist: mc period 5     | Specify Sell/Buy fixed period.\n"
+"$mylist: buy AAPL 10@50  | Add 10 AAPL stocks at 50$ each.\n"
+"$mylist: buy AAPL 20     | Add 20 AAPL stocks at current price.\n"
+"$mylist: buy AAPL        | Add 1 AAPL stocks at current price.\n"
+"$mylist: sell AAPL 10    | Remove 10 AAPL stocks.\n"
+"$mylist: sell AAPL       | Remove all AAPL stocks.\n"
+"$mylist?                 | Show portfolio associated with mylist.\n"
+"```\n",0);
     } else {
         botSendMessage(br->target,
             "Sorry, I can't understand your request. Try $HELP.",0);
