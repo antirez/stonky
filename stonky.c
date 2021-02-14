@@ -1730,7 +1730,8 @@ void *scanStocksThread(void *arg) {
 
         /* Compute Montecarlo two times, for the last year, and for
          * the last two months, detecting big changes. */
-        mcres mclong, mcshort, mcvs, mcday;
+        mcres mcvl, mclong, mcshort, mcvs, mcday;
+        computeMontecarlo(yd,250*5,1000,5,&mcvl);
         computeMontecarlo(yd,250,1000,5,&mclong);
         computeMontecarlo(yd,50,1000,5,&mcshort);
         computeMontecarlo(yd,20,1000,5,&mcvs);
@@ -1739,8 +1740,10 @@ void *scanStocksThread(void *arg) {
 
         int showstats = debugMode ? 1 : 0;
         if (verboseMode)
-            printf("Scanning %s: %f -> %f -> %f\n", symbol,
-                mclong.gain, mcshort.gain, mcvs.gain);
+            printf("Scanning %s: %.2f -> %.2f -> %.2f -> %.2f "
+                   "-> %.2f(+-%.2f%%)\n", symbol,
+                mcvl.gain, mclong.gain, mcshort.gain, mcvs.gain, mcday.gain,
+                mcday.absdiffper);
 
         if (mclong.gain < mcshort.gain &&
             mcshort.gain <  mcvs.gain &&
@@ -1754,10 +1757,11 @@ void *scanStocksThread(void *arg) {
             showstats=1;
         } else if (mclong.gain < mcshort.gain &&
             mcshort.gain <  mcvs.gain &&
-            mclong.gain > 5 &&
-            mcshort.gain > 5 &&
+            mcvl.gain > 1.5 &&
+            mclong.gain > 3 &&
+            mcshort.gain > 4 &&
             mcvs.gain > 5 &&
-            mcday.gain > 1 &&
+            mcday.gain > 1.5 &&
             mcday.absdiffper < 100)
         {
             printf("evenbetter: %d/%d %s\n",j,NumSymbols,symbol);
