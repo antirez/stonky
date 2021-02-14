@@ -687,32 +687,56 @@ error:
     return stockid;
 }
 
+/* Return the number of items in the specified list name. The
+ * function does not signal errors, and just returns 0 in such case. */
+int dbGetListCount(const char *listname) {
+    sqlite3_stmt *stmt = NULL;
+    int retval = 0, rc;
+    int64_t listid = dbGetListID(listname,0);
+    if (listid == 0) return 0;
+
+    char *sql = "SELECT COUNT(*) FROM ListStock WHERE listid=?";
+    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
+    if (rc != SQLITE_OK) goto error;
+    rc = sqlite3_bind_int64(stmt,1,listid);
+    if (rc != SQLITE_OK) goto error;
+    if (sqlite3_step(stmt) != SQLITE_ROW) goto error;
+    retval = sqlite3_column_int64(stmt,0);
+
+error:
+    sqlite3_finalize(stmt);
+    return retval;
+}
+
 /* Remove a stock from the list, returning C_OK if the stock was
  * actually there, and was removed. Otherwise C_ERR is returned.
  * If dellist is true, and the removed stock has the effect of creating an
  * emtpy list, the list itself is removed. */
 int dbDelStockFromList(const char *listname, const char *symbol, int dellist) {
-    int64_t listid = dbGetListID(listname,0);
-    if (listid == 0) return C_ERR;
+    int64_t stockid = dbGetStockID(listname,symbol);
 
     sqlite3_stmt *stmt = NULL;
     int rc;
     int retval = C_ERR;
 
-    const char *sql = "DELETE FROM ListStock WHERE listid=? AND symbol=? "
-                      "COLLATE NOCASE";
+    const char *sql = "DELETE FROM ListStock WHERE rowid=?";
     rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
     if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_bind_int64(stmt,1,listid);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_bind_text(stmt,2,symbol,-1,NULL);
+    rc = sqlite3_bind_int64(stmt,1,stockid);
     if (rc != SQLITE_OK) goto error;
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) goto error;
     retval = C_OK;
 
-    if (dellist) {
-        /* TODO: remove the list if this was the last stock. */
+    if (dellist && dbGetListCount(listname) == 0) {
+        const char *sql = "DELETE FROM Lists WHERE name=?";
+        sqlite3_finalize(stmt);
+        rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
+        if (rc != SQLITE_OK) goto error;
+        rc = sqlite3_bind_text(stmt,1,listname,-1,NULL);
+        if (rc != SQLITE_OK) goto error;
+        rc = sqlite3_step(stmt);
+        if (rc != SQLITE_DONE) goto error;
     }
 
 error:
