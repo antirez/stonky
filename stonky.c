@@ -352,6 +352,8 @@ void sqlEnd(sqlRow *row) {
  * is returned (and the row object is freed). If you stop the iteration
  * before all the elements are used, you need to call sqlEnd(). */
 int sqlNextRow(sqlRow *row) {
+    if (row->stmt == NULL) return 0;
+
     if (row->col != NULL) {
         if (sqlite3_step(row->stmt) != SQLITE_ROW) {
             sqlEnd(row);
@@ -419,7 +421,7 @@ int sqlSelect(sqlRow *row, const char *sql, ...) {
     return rc;
 }
 
-/* Wrapper for sqlGenericQuery() using varialbe number of args.
+/* Wrapper for sqlGenericQuery() using variable number of args.
  * This is what you want when doing SELECT queries that return a
  * single row. This function will care to also call sqlNextRow() for
  * you in case the return value is SQLITE_ROW. */
@@ -430,6 +432,23 @@ int sqlSelectOneRow(sqlRow *row, const char *sql, ...) {
     if (rc == SQLITE_ROW) sqlNextRow(row);
     va_end(ap);
     return rc;
+}
+
+/* Wrapper for sqlGenericQuery() to do a SELECT and return directly
+ * the integer of the first row, or zero on error. */
+int64_t sqlSelectInt(const char *sql, ...) {
+    sqlRow row;
+    int64_t i = 0;
+    va_list ap;
+    va_start(ap,sql);
+    int rc = sqlGenericQuery(&row,sql,ap);
+    if (rc == SQLITE_ROW) {
+        sqlNextRow(&row);
+        i = row.col[0].i;
+        sqlEnd(&row);
+    }
+    va_end(ap);
+    return i;
 }
 
 /* ============================================================================
@@ -830,17 +849,12 @@ void dbClose(void) {
  * On error, zero is returned. */
 int64_t dbGetListID(const char *listname, int create) {
     int64_t listid = 0;
-    sqlRow row;
 
-    int rc = sqlSelectOneRow(&row,
+    listid = sqlSelectInt(
         "SELECT rowid FROM Lists WHERE name=?s COLLATE NOCASE",
         listname);
-    if (rc == SQLITE_ROW) {
-        listid = row.col[0].i;
-        sqlEnd(&row);
-    } else if (create) {
+    if (listid == 0 && create)
         listid = sqlInsert("INSERT INTO Lists VALUES(?s)",listname);
-    }
     return listid;
 }
 
@@ -851,50 +865,20 @@ int64_t dbGetStockID(const char *listname, const char *stock) {
     int64_t listid = dbGetListID(listname,0);
     if (listid == 0) return 0;
 
-    sqlite3_stmt *stmt = NULL;
-    int rc;
-    char *sql = "SELECT rowid FROM ListStock WHERE listid=? AND symbol=? "
-                 "COLLATE NOCASE";
-    int64_t stockid = 0;
-
     /* Check if a list with such name already exists. */
-    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_bind_int64(stmt,1,listid);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_bind_text(stmt,2,stock,-1,NULL);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_step(stmt);
-    if (rc == SQLITE_ROW) {
-        stockid = sqlite3_column_int64(stmt,0);
-    } else {
-        stockid = 0;
-    }
-
-error:
-    sqlite3_finalize(stmt);
-    return stockid;
+    return sqlSelectInt(
+        "SELECT rowid FROM ListStock WHERE "
+        "listid=?i AND symbol=?s COLLATE NOCASE",listid,stock);
 }
 
 /* Return the number of items in the specified list name. The
  * function does not signal errors, and just returns 0 in such case. */
 int dbGetListCount(const char *listname) {
-    sqlite3_stmt *stmt = NULL;
-    int retval = 0, rc;
     int64_t listid = dbGetListID(listname,0);
     if (listid == 0) return 0;
 
-    char *sql = "SELECT COUNT(*) FROM ListStock WHERE listid=?";
-    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_bind_int64(stmt,1,listid);
-    if (rc != SQLITE_OK) goto error;
-    if (sqlite3_step(stmt) != SQLITE_ROW) goto error;
-    retval = sqlite3_column_int64(stmt,0);
-
-error:
-    sqlite3_finalize(stmt);
-    return retval;
+    return sqlSelectInt(
+        "SELECT COUNT(*) FROM ListStock WHERE listid=?i",listid);
 }
 
 /* Remove a stock from the list, returning C_OK if the stock was
@@ -904,45 +888,20 @@ error:
 int dbDelStockFromList(const char *listname, const char *symbol, int dellist) {
     int64_t stockid = dbGetStockID(listname,symbol);
 
-    sqlite3_stmt *stmt = NULL;
-    int rc;
-    int retval = C_ERR;
-
-    const char *sql = "DELETE FROM ListStock WHERE rowid=?";
-    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_bind_int64(stmt,1,stockid);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_step(stmt);
-    if (rc != SQLITE_DONE) goto error;
-    retval = C_OK;
+    if (!sqlQuery("DELETE FROM ListStock WHERE rowid=?i",stockid))
+        return C_ERR;
 
     /* Delete the list if is now orphaned. */
     if (dellist && dbGetListCount(listname) == 0) {
-        const char *sql = "DELETE FROM Lists WHERE name=?";
-        sqlite3_finalize(stmt);
-        rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-        if (rc != SQLITE_OK) goto error;
-        rc = sqlite3_bind_text(stmt,1,listname,-1,NULL);
-        if (rc != SQLITE_OK) goto error;
-        rc = sqlite3_step(stmt);
-        if (rc != SQLITE_DONE) goto error;
+        if (!sqlQuery("DELETE FROM Lists WHERE name=?s",listname))
+            return C_ERR;
     }
 
     /* Finally remove the packs associated with this item in the list. */
-    sql = "DELETE FROM StockPack WHERE rowid=?";
-    sqlite3_finalize(stmt);
-    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_bind_int64(stmt,1,stockid);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_step(stmt);
-    if (rc != SQLITE_DONE) goto error;
-    retval = C_OK;
+    if (!sqlQuery("DELETE FROM StockPack WHERE rowid=?",stockid))
+        return C_ERR;
 
-error:
-    sqlite3_finalize(stmt);
-    return retval;
+    return C_OK;
 }
 
 /* This represents bought stocks associated with a symbol in a given list.
@@ -950,7 +909,7 @@ error:
 typedef struct stockpack {
     int64_t rowid;
     int64_t stockid;
-    int quantity;
+    int64_t quantity;
     double avgprice;
     /* Only filled by dbGetPortfolio. */
     char symbol[64];
@@ -991,30 +950,24 @@ stockpack *dbGetPortfolio(const char *listname, int *count) {
 
     stockpack *packs = NULL;
     int rows = 0;
-    sqlite3_stmt *stmt = NULL;
-    int rc;
     char *sql = "SELECT symbol,quantity,avgprice FROM ListStock "
                 "CROSS JOIN StockPack On "
                 "ListStock.rowid = StockPack.liststockid "
-                "WHERE ListStock.listid=? ORDER BY symbol";
+                "WHERE ListStock.listid=?i ORDER BY symbol";
 
-    /* Check if a list with such name already exists. */
-    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_bind_int64(stmt,1,listid);
-    if (rc != SQLITE_OK) goto error;
-
-    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    sqlRow row;
+    sqlSelect(&row,sql,listid);
+    while (sqlNextRow(&row)) {
         packs = realloc(packs,sizeof(stockpack)*(rows+1));
         stockpack *pack = packs+rows;
         memset(pack,0,sizeof(stockpack));
-        char *symbol = (char*)sqlite3_column_text(stmt,0);
-        size_t len = strlen((char*)symbol);
+        const char *symbol = row.col[0].s;
+        size_t len = row.col[0].i;
         if (len >= sizeof(pack->symbol)) len = sizeof(packs->symbol)-1;
         memcpy(pack->symbol,symbol,len);
         pack->symbol[len] = 0;
-        pack->quantity = sqlite3_column_int64(stmt,1);
-        pack->avgprice = sqlite3_column_double(stmt,2);
+        pack->quantity = row.col[1].i;
+        pack->avgprice = row.col[2].d;
         /* Compute the gain. */
         populateStockPackInfo(pack,symbol);
         rows++;
@@ -1026,9 +979,6 @@ stockpack *dbGetPortfolio(const char *listname, int *count) {
         xfree(packs);
         packs = NULL;
     }
-
-error:
-    sqlite3_finalize(stmt);
     return packs;
 }
 
@@ -1042,21 +992,7 @@ int64_t dbAddStockToList(const char *listname, const char *symbol) {
     int64_t stockid = dbGetStockID(listname,symbol);
     if (stockid) return stockid;
 
-    int rc;
-    sqlite3_stmt *stmt = NULL;
-    const char *sql = "INSERT INTO ListStock VALUES(?,?)";
-    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_bind_int64(stmt,1,listid);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_bind_text(stmt,2,symbol,-1,NULL);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_step(stmt);
-    if (rc != SQLITE_DONE) goto error;
-    stockid = sqlite3_last_insert_rowid(dbHandle);
-
-error:
-    sqlite3_finalize(stmt);
+    stockid = sqlInsert("INSERT INTO ListStock VALUES(?i,?s)",listid,symbol);
     return stockid;
 }
 
@@ -1064,34 +1000,23 @@ error:
  * you can free the returned object with sdsfreesplitres().
  * If the list does not exist, NULL is returned. */
 sds *dbGetStocksFromList(const char *listname, int *numstocks) {
-    sqlite3_stmt *stmt = NULL;
-    int rc;
     int rows = 0;
     sds *symbols = NULL;
-    char *sql = "SELECT symbol FROM ListStock WHERE listid=?";
 
     /* Get the ID of the specified list, if any. */
     int64_t listid = dbGetListID(listname,0);
     if (listid == 0) return NULL;
 
     /* Check if a list with such name already exists. */
-    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_bind_int64(stmt,1,listid);
-    if (rc != SQLITE_OK) goto error;
-    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    sqlRow row;
+    sqlSelect(&row,"SELECT symbol FROM ListStock WHERE listid=?i",listid);
+    while (sqlNextRow(&row)) {
         symbols = realloc(symbols,sizeof(sds)*(rows+1));
-        sds sym = sdsnew((char*)sqlite3_column_text(stmt,0));
+        sds sym = sdsnew(row.col[0].s);
         symbols[rows++] = sym;
     }
     *numstocks = rows;
-    sqlite3_finalize(stmt);
     return symbols;
-
-error:
-    sdsfreesplitres(symbols,rows);
-    sqlite3_finalize(stmt);
-    return NULL;
 }
 
 /* Fetch the stockpack for the stockid in sp->stockid.
@@ -1099,25 +1024,21 @@ error:
  * filled by reference. Otherwise if no stockpack was found, or in case
  * of query errors, C_ERR is returned. */
 int dbGetStockPack(stockpack *sp) {
-    sqlite3_stmt *stmt = NULL;
-    int retval = C_ERR, rc;
-    char *sql = "SELECT rowid,quantity,avgprice FROM "
-                "StockPack WHERE liststockid=?";
+    sqlRow row;
+    sqlSelect(&row,
+        "SELECT rowid,quantity,avgprice FROM StockPack WHERE liststockid=?i",
+        sp->stockid);
 
     /* Check if a list with such name already exists. */
-    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_bind_int64(stmt,1,sp->stockid);
-    if (rc != SQLITE_OK) goto error;
-    if (sqlite3_step(stmt) != SQLITE_ROW) goto error;
-    sp->rowid = sqlite3_column_int64(stmt,0);
-    sp->quantity = sqlite3_column_int64(stmt,1);
-    sp->avgprice = sqlite3_column_double(stmt,2);
-    retval = C_OK;
-
-error:
-    sqlite3_finalize(stmt);
-    return retval;
+    if (sqlNextRow(&row)) {
+        sp->rowid = row.col[0].i;
+        sp->quantity = row.col[1].i;
+        sp->avgprice = row.col[2].d;
+        sqlEnd(&row);
+        return C_OK;
+    } else {
+        return C_ERR;
+    }
 }
 
 /* Update the stockpack according to its description in the 'sp'
@@ -1127,50 +1048,25 @@ error:
  *
  * If a new stockpack is created, rowid is populated with its ID.
  *
- * If sp->quantity is zero, the stockpack is deleted from the DB. */
+ * If sp->quantity is zero, the stockpack is deleted from the DB.
+ *
+ * On error C_ERR is returned, otherwise C_OK. */
 int dbUpdateStockPack(stockpack *sp) {
-    sqlite3_stmt *stmt = NULL;
-    int retval = C_ERR, rc;
-
     if (sp->rowid == 0) {
-        char *sql = "INSERT INTO StockPack VALUES(?,?,?)";
-        rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-        if (rc != SQLITE_OK) goto error;
-        rc = sqlite3_bind_int64(stmt,1,sp->stockid);
-        if (rc != SQLITE_OK) goto error;
-        rc = sqlite3_bind_int64(stmt,2,sp->quantity);
-        if (rc != SQLITE_OK) goto error;
-        rc = sqlite3_bind_double(stmt,3,sp->avgprice);
-        if (rc != SQLITE_OK) goto error;
-        if (sqlite3_step(stmt) != SQLITE_DONE) goto error;
-        sp->rowid = sqlite3_last_insert_rowid(dbHandle);
+        sp->rowid = sqlInsert(
+            "INSERT INTO StockPack VALUES(?i,?i,?d)",
+            sp->stockid, sp->quantity, sp->avgprice);
+        return sp->rowid == 0 ? C_ERR : C_OK;
     } else if (sp->quantity > 0) {
-        char *sql = "UPDATE StockPack SET quantity=?,avgprice=? "
-                    "WHERE rowid=?";
-        rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-        if (rc != SQLITE_OK) goto error;
-        rc = sqlite3_bind_int64(stmt,1,sp->quantity);
-        if (rc != SQLITE_OK) goto error;
-        rc = sqlite3_bind_double(stmt,2,sp->avgprice);
-        if (rc != SQLITE_OK) goto error;
-        rc = sqlite3_bind_int64(stmt,3,sp->rowid);
-        if (rc != SQLITE_OK) goto error;
-        if (sqlite3_step(stmt) != SQLITE_DONE) goto error;
+        int done = sqlQuery("UPDATE StockPack SET quantity=?i,avgprice=?d "
+                             "WHERE rowid=?i",
+                             sp->quantity,sp->avgprice,sp->rowid);
+        return done ? C_OK : C_ERR;
     } else {
-        char *sql = "DELETE FROM StockPack WHERE rowid=?";
-        rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-        if (rc != SQLITE_OK) goto error;
-        rc = sqlite3_bind_int64(stmt,1,sp->rowid);
-        if (rc != SQLITE_OK) goto error;
-        if (sqlite3_step(stmt) != SQLITE_DONE) goto error;
+        int done = sqlQuery("DELETE FROM StockPack WHERE rowid=?",sp->rowid);
+        return done ? C_OK : C_ERR;
     }
-    retval = C_OK;
-
-error:
-    sqlite3_finalize(stmt);
-    return retval;
 }
-
 
 /* Add a new stockpack for the specified symbol and into the specified list.
  * Note that if a stock pack already exists for this stocks, the bot will
@@ -1630,7 +1526,7 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
         } else {
             reply = sdscatprintf(sdsempty(),
                 "Now you have %d %s stocks at an average price of %.2f",
-                sp.quantity,symbol,sp.avgprice);
+                (int)sp.quantity,symbol,sp.avgprice);
         }
     } else if (!strcasecmp(argv[1],"sell") && (argc == 3 || argc == 4)) {
         /* $list: sell [quantity] */
@@ -1661,7 +1557,7 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
                 reply = sdscatprintf(sdsempty(),
                     "You are left with %d %s stocks at an average "
                     "price of %.2f",
-                    sp.quantity,symbol,sp.avgprice);
+                    (int)sp.quantity,symbol,sp.avgprice);
             } else {
                 reply = sdscatprintf(sdsempty(),
                     "You no longer own %s stocks",symbol);
@@ -1735,7 +1631,7 @@ void botHandleShowPortfolioRequest(botRequest *br, sds *argv) {
 
         reply = sdscatprintf(reply,"%-5s | %-3d | %s%.2f (%s%.2f%%) %s\n",
             pack->symbol,
-            pack->quantity,
+            (int)pack->quantity,
             (pack->gain >= 0) ? "+" : "",
             pack->gain,
             (pack->gainperc >= 0) ? "+" : "",
