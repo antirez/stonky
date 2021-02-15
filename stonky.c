@@ -295,6 +295,7 @@ int sqlGenericQuery(sqlRow *row, const char *sql, va_list ap) {
                 goto error;
             }
             query = sdscatlen(query,"?",1);
+            p++; /* Skip the specifier. */
         } else {
             query = sdscatlen(query,p,1);
         }
@@ -407,12 +408,26 @@ int sqlQuery(const char *sql, ...) {
     va_end(ap);
     return retval;
 }
+
 /* Wrapper for sqlGenericQuery() using varialbe number of args.
  * This is what you want when doing SELECT queries. */
 int sqlSelect(sqlRow *row, const char *sql, ...) {
     va_list ap;
     va_start(ap,sql);
     int rc = sqlGenericQuery(row,sql,ap);
+    va_end(ap);
+    return rc;
+}
+
+/* Wrapper for sqlGenericQuery() using varialbe number of args.
+ * This is what you want when doing SELECT queries that return a
+ * single row. This function will care to also call sqlNextRow() for
+ * you in case the return value is SQLITE_ROW. */
+int sqlSelectOneRow(sqlRow *row, const char *sql, ...) {
+    va_list ap;
+    va_start(ap,sql);
+    int rc = sqlGenericQuery(row,sql,ap);
+    if (rc == SQLITE_ROW) sqlNextRow(row);
     va_end(ap);
     return rc;
 }
@@ -814,34 +829,18 @@ void dbClose(void) {
  * and returns the ID of the newly created list.
  * On error, zero is returned. */
 int64_t dbGetListID(const char *listname, int create) {
-    sqlite3_stmt *stmt = NULL;
-    int rc;
-    char *sql = "SELECT rowid FROM Lists WHERE name=? COLLATE NOCASE";
     int64_t listid = 0;
+    sqlRow row;
 
-    /* Check if a list with such name already exists. */
-    rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_bind_text(stmt,1,listname,-1,NULL);
-    if (rc != SQLITE_OK) goto error;
-    rc = sqlite3_step(stmt);
+    int rc = sqlSelectOneRow(&row,
+        "SELECT rowid FROM Lists WHERE name=?s COLLATE NOCASE",
+        listname);
     if (rc == SQLITE_ROW) {
-        listid = sqlite3_column_int64(stmt,0);
+        listid = row.col[0].i;
+        sqlEnd(&row);
     } else if (create) {
-        /* We need to insert it. */
-        sqlite3_finalize(stmt);
-        sql = "INSERT INTO Lists VALUES(?)";
-        rc = sqlite3_prepare_v2(dbHandle,sql,-1,&stmt,NULL);
-        if (rc != SQLITE_OK) goto error;
-        rc = sqlite3_bind_text(stmt,1,listname,-1,NULL);
-        if (rc != SQLITE_OK) goto error;
-        rc = sqlite3_step(stmt);
-        if (rc != SQLITE_DONE) goto error;
-        listid = sqlite3_last_insert_rowid(dbHandle);
+        listid = sqlInsert("INSERT INTO Lists VALUES(?s)",listname);
     }
-
-error:
-    sqlite3_finalize(stmt);
     return listid;
 }
 
