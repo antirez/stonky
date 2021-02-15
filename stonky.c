@@ -1063,7 +1063,7 @@ int dbUpdateStockPack(stockpack *sp) {
                              sp->quantity,sp->avgprice,sp->rowid);
         return done ? C_OK : C_ERR;
     } else {
-        int done = sqlQuery("DELETE FROM StockPack WHERE rowid=?",sp->rowid);
+        int done = sqlQuery("DELETE FROM StockPack WHERE rowid=?i",sp->rowid);
         return done ? C_OK : C_ERR;
     }
 }
