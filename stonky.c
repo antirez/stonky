@@ -1889,10 +1889,15 @@ void *scanStocksThread(void *arg) {
 
         int showstats = debugMode ? 1 : 0;
         if (verboseMode)
-            printf("Scanning %s: VL%.2f -> L%.2f -> S%.2f -> VS%.2f "
-                   "-> D%.2f(+-%.2f%%)\n", symbol,
-                mcvl.gain, mclong.gain, mcshort.gain, mcvs.gain, mcday.gain,
-                mcday.absdiffper);
+            printf(
+            "Scanning %s: VL%.2f(+-%.2f%%) -> L%.2f(+-%.2f%%) ->\n"
+            "         S%.2f(+-%.2f%%) -> VS%.2f(+-%.2f%%) -> D%.2f(+-%.2f%%)\n",
+                symbol,
+                mcvl.gain, mcvl.absdiffper,
+                mclong.gain, mclong.absdiffper,
+                mcshort.gain, mcshort.absdiffper,
+                mcvs.gain, mcvs.absdiffper,
+                mcday.gain, mcday.absdiffper);
 
         if (mclong.gain < mcshort.gain &&
             mcshort.gain <  mcvs.gain &&
@@ -1948,9 +1953,7 @@ void *scanStocksThread(void *arg) {
                 mcvs.maxgain, mcday.gain, mcday.absdiff, mcday.absdiffper,
                 mcday.mingain, mcday.maxgain);
         }
-
-        //sleep(1);
-        usleep(100000);
+        sleep(1);
     }
     dbClose();
     return NULL;
