@@ -1924,18 +1924,9 @@ void *scanStocksThread(void *arg) {
             printf("evenbetter: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("evenbetter", symbol);
             showstats=1;
-        } else if (mcvl.gain > 0.5 && mcvl.absdiffper < 100 &&
-                   mclong.gain > 0.5 && mclong.absdiffper < 100 &&
-                   mcshort.gain > 0.5 && mcshort.absdiffper < 100 &&
-                   mcvs.gain > 0.5 && mcvs.absdiffper < 100)
-        {
-            printf("consistency: %d/%d %s\n",j,NumSymbols,symbol);
-            dbAddStockToList("consistency", symbol);
-            showstats=1;
         } else {
             dbDelStockFromList("tothemoon", symbol, 0);
             dbDelStockFromList("evenbetter", symbol, 0);
-            dbDelStockFromList("consistency", symbol, 0);
         }
 
         if (showstats) {
