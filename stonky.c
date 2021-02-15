@@ -1721,6 +1721,7 @@ void *botHandleRequest(void *arg) {
 "$mylist: sell AAPL 10    | Remove 10 AAPL stocks.\n"
 "$mylist: sell AAPL       | Remove all AAPL stocks.\n"
 "$mylist?                 | Show portfolio associated with mylist.\n"
+"$$ ls                    | Show all the lists available.\n"
 "```\n",0);
     } else {
         botSendMessage(br->target,
