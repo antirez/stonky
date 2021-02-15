@@ -1648,6 +1648,26 @@ cleanup:
     sdsfree(listname);
 }
 
+/* Handle the $$ ls request, returning the list of all the lists. */
+void botHandleLsRequest(botRequest *br) {
+    sds listnames = sdsnew("Existing lists: ");
+    sqlRow row;
+    sqlSelect(&row,"SELECT name FROM Lists");
+    int rows = 0;
+    while(sqlNextRow(&row)) {
+        listnames = sdscat(listnames,row.col[0].s);
+        listnames = sdscat(listnames,", ");
+        rows++;
+    }
+    if (rows) {
+        sdsrange(listnames,0,-3);
+        listnames = sdscat(listnames,".");
+    }
+    sqlEnd(&row);
+    botSendMessage(br->target,listnames,0);
+    sdsfree(listnames);
+}
+
 /* Request handling thread entry point. */
 void *botHandleRequest(void *arg) {
     dbHandle = dbInit(0);
@@ -1657,7 +1677,14 @@ void *botHandleRequest(void *arg) {
     int argc;
     sds *argv = sdssplitargs(br->request,&argc);
 
-    if (argv[0][sdslen(argv[0])-1] == ':') {
+    if (argc >= 2 && !strcasecmp(argv[0],"$")) {
+        /* $$ ls               -- list all the available lists. */
+        if (argc == 2 && !strcasecmp(argv[1],"ls"))
+            botHandleLsRequest(br);
+        else
+            botSendMessage(br->target,
+                "Invalid control command, try $HELP",0);
+    } else if (argv[0][sdslen(argv[0])-1] == ':') {
         /* $list: [+... -...] */
         botHandleListRequest(br,argv,argc);
     } else if (argv[0][sdslen(argv[0])-1] == '?') {
