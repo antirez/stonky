@@ -288,7 +288,7 @@ int sqlGenericQuery(sqlRow *row, const char *sql, va_list ap) {
     const char *p = sql;
     while(p[0]) {
         if (p[0] == '?') {
-            if (p[1] == 's' || p[1] == 'i' || p[2] == 'd') {
+            if (p[1] == 's' || p[1] == 'i' || p[1] == 'd') {
                 if (numspec == SQL_MAX_SPEC) goto error;
                 spec[numspec++] = p[1];
             } else {
