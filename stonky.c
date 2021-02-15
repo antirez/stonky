@@ -1081,6 +1081,9 @@ int dbUpdateStockPack(stockpack *sp) {
  *
  * On success C_OK is returned, on error C_ERR. */
 int dbBuyStocks(const char *listname, const char *symbol, double price, int quantity, stockpack *spp) {
+    /* Sanity check. */
+    if (quantity <= 0) return C_ERR;
+
     /* Create the list and its stock. */
     int64_t listid = dbGetListID(listname,1);
     if (listid == 0) return C_ERR;
@@ -1117,6 +1120,9 @@ int dbBuyStocks(const char *listname, const char *symbol, double price, int quan
  * On success the *ssp structure is filled with the condition of the stock
  * *after* the selling. */
 int dbSellStocks(const char *listname, const char *symbol, int quantity, stockpack *sp) {
+    /* Sanity check. */
+    if (quantity < 0) return C_ERR;
+
     sp->quantity = 0; /* Whatever happens, don't return a negative value
                          if not on purpose. */
 
