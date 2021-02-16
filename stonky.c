@@ -304,7 +304,11 @@ int sqlGenericQuery(sqlRow *row, const char *sql, va_list ap) {
 
     /* Prepare the query and bind the query arguments. */
     rc = sqlite3_prepare_v2(dbHandle,query,-1,&stmt,NULL);
-    if (rc != SQLITE_OK) goto error;
+    if (rc != SQLITE_OK) {
+        if (verboseMode) printf("Query error: %s: %s\n", query,
+                                sqlite3_errmsg(dbHandle));
+        goto error;
+    }
 
     for (int j = 0; j < numspec; j++) {
         switch(spec[j]) {
@@ -822,6 +826,14 @@ sqlite3 *dbInit(int createdb) {
                                           "quantity INT, "
                                           "avgprice REAL);"
     "CREATE INDEX IF NOT EXISTS idx_stockpack_lsid ON StockPack(liststockid);"
+    "CREATE TABLE IF NOT EXISTS ProfitLoss(symbol TEXT COLLATE NOCASE, "
+                                          "listid INT, "
+                                          "selltime INT, "
+                                          "quantity INT, "
+                                          "buyprice REAL,"
+                                          "sellprice REAL,"
+                                          "csym TEXT);" /* Currency symbol. */
+    "CREATE INDEX IF NOT EXISTS idx_profitloss_lsid ON ProfitLoss(listid);"
     ;
 
         char *errmsg;
@@ -836,7 +848,7 @@ sqlite3 *dbInit(int createdb) {
     return db;
 }
 
-/* Should be called every time a thread exists, so that if the thread has
+/* Should be called every time a thread exits, so that if the thread has
  * an SQLite thread-local handle, it gets closed. */
 void dbClose(void) {
     if (dbHandle) sqlite3_close(dbHandle);
@@ -1119,7 +1131,7 @@ int dbBuyStocks(const char *listname, const char *symbol, double price, int quan
  *
  * On success the *ssp structure is filled with the condition of the stock
  * *after* the selling. */
-int dbSellStocks(const char *listname, const char *symbol, int quantity, stockpack *sp) {
+int dbSellStocks(const char *listname, const char *symbol, int quantity, double sellprice, const char *csym, stockpack *sp) {
     /* Sanity check. */
     if (quantity < 0) return C_ERR;
 
@@ -1140,6 +1152,14 @@ int dbSellStocks(const char *listname, const char *symbol, int quantity, stockpa
         return C_ERR;
     }
     if (quantity == 0) quantity = sp->quantity;
+
+    /* Create a profit and loss entry with this selling. */
+    int64_t listid = dbGetListID(listname,0);
+    if (listid) {
+        sqlInsert("INSERT INTO ProfitLoss VALUES(?s,?i,?i,?i,?d,?d,?s)",
+            symbol, listid, (int64_t)time(NULL), quantity, sp->avgprice,
+            sellprice, csym);
+    }
 
     /* Finally update. */
     sp->quantity -= quantity;
@@ -1477,6 +1497,18 @@ cleanup:
     sdsfree(reply);
 }
 
+/* Parse a string in the format <quantity> or <quantity>@<price> for
+ * stock selling / buying subcommands. Populate the parameters by
+ * reference. */
+void parseQuantityAndPrice(const char *str, int64_t *quantity, double *price) {
+    /* Parse the quantity@price argument if available. */
+    sds copy = sdsnew(str);
+    char *p = strchr(copy,'@');
+    if (p) *price = strtod(p+1,NULL);
+    *quantity = strtoll(copy,NULL,10);
+    sdsfree(copy);
+}
+
 /* Handle list requests. */
 void botHandleListRequest(botRequest *br, sds *argv, int argc) {
     /* Remove the final ":" from the list name. */
@@ -1502,18 +1534,11 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
         sdsfreesplitres(stocks,numstocks);
     } else if (!strcasecmp(argv[1],"buy") && (argc == 3 || argc == 4)) {
         /* $list: buy SYMBOL [100@price] */
-        int quantity = 1;
+        int64_t quantity = 1;
         double price = 0;
         sds symbol = argv[2];
 
-        /* Parse the quantity@price argument if available. */
-        if (argc == 4) {
-            sds details = sdsdup(argv[3]);
-            char *p = strchr(details,'@');
-            if (p) price = strtod(p+1,NULL);
-            quantity = atoi(details);
-            sdsfree(details);
-        }
+        if (argc == 4) parseQuantityAndPrice(argv[3],&quantity,&price);
 
         /* Check that the symbol exists. */
         ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
@@ -1536,11 +1561,12 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
         }
     } else if (!strcasecmp(argv[1],"sell") && (argc == 3 || argc == 4)) {
         /* $list: sell [quantity] */
-        int quantity = 0; /* All the stocks. */
+        int64_t quantity = 0; /* All the stocks. */
         sds symbol = argv[2];
+        double sellprice = 0;
 
-        /* Parse the quantity argument if available. */
-        if (argc == 4) quantity = atoi(argv[3]);
+        /* Parse the quantity@price argument if available. */
+        if (argc == 4) parseQuantityAndPrice(argv[3],&quantity,&sellprice);
 
         /* Check that the symbol exists. */
         ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
@@ -1549,10 +1575,10 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
                 "Stock symbol %s not found", symbol);
             goto fmterr;
         }
-        freeYahooData(yd);
+        if (sellprice == 0) sellprice = yd->reg;
 
         stockpack sp;
-        if (dbSellStocks(listname,symbol,quantity,&sp) == C_ERR) {
+        if (!dbSellStocks(listname,symbol,quantity,sellprice,yd->csym,&sp)) {
             if (sp.quantity < 0) {
                 reply = sdsnew("You don't have enough stocks to sell");
             } else {
@@ -1569,6 +1595,7 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
                     "You no longer own %s stocks",symbol);
             }
         }
+        freeYahooData(yd);
     } else {
         /* Otherwise we are in edit mode, with +... -... symbols. */
         for (int j = 1; j < argc; j++) {
@@ -1654,6 +1681,77 @@ cleanup:
     sdsfree(listname);
 }
 
+/* Turn an Unix time into a string in the form "x days|months|..." */
+sds sdsTimeAgo(time_t t) {
+    char *unit;
+    if (t >= 3600*24*30) {
+        t /= 3600*24*30;
+        unit = "month";
+    } else if (t >= 3600*24) {
+        t /= 3600*24;
+        unit = "day";
+    } else if (t >= 3600) {
+        t /= 3600;
+        unit = "hour";
+    } else if (t >= 60) {
+        t /= 60;
+        unit = "minute";
+    } else {
+        unit = "second";
+    }
+
+    sds s = sdscatprintf(sdsempty(),"%ld %s", (long)t, unit);
+    if (t > 1) s = sdscat(s,"s"); /* Pluralize if needed. */
+    return s;
+}
+
+/* Handle show portfolio profit & loss requests. */
+void botHandleShowProfitLossRequest(botRequest *br, sds *argv) {
+    /* Remove the final "?" from the list name. */
+    sds listname = sdsnewlen(argv[0],sdslen(argv[0])-1);
+    sds reply = NULL;
+    int64_t listid = dbGetListID(listname,0);
+    if (listid == 0) {
+        reply = sdsnew("No such list");
+        goto cleanup;
+    }
+
+    sqlRow row;
+    if (sqlSelect(&row,"SELECT * FROM ProfitLoss WHERE listid=?i "
+                       "ORDER BY selltime", listid) != SQLITE_ROW)
+    {
+        reply = sdsnew("No sells history for this portfolio");
+        goto cleanup;
+    }
+
+    /* Build the reply with the history of sells. */
+    reply = sdsnew("```\n");
+    while(sqlNextRow(&row)) {
+        const char *symbol = row.col[0].s;
+        time_t selltime = row.col[2].i;
+        int quantity = row.col[3].i;
+        double buyprice = row.col[4].d;
+        double sellprice = row.col[5].d;
+        double diff = (sellprice-buyprice)*quantity;
+        double diffperc = ((buyprice/sellprice)-1)*100;
+        const char *csym = row.col[6].s;
+        sds ago = sdsTimeAgo(selltime);
+        reply = sdscatprintf(reply,
+            "%-5s: %d stocks sold for %f%s (P/L %s%f %s%f%%), %s\n",
+            symbol, quantity, sellprice*quantity, csym,
+            (diff >= 0) ? "+" : "", diff,
+            (diffperc >= 0) ? "+" : "", diffperc,
+            ago);
+        sdsfree(ago);
+    }
+    reply = sdscat(reply,"```");
+
+cleanup:
+    if (reply) botSendMessage(br->target,reply,0);
+    sdsfree(reply);
+    sdsfree(listname);
+}
+
 /* Handle the $$ ls request, returning the list of all the lists. */
 void botHandleLsRequest(botRequest *br) {
     sds listnames = sdsnew("Existing lists: ");
@@ -1694,8 +1792,14 @@ void *botHandleRequest(void *arg) {
         /* $list: [+... -...] */
         botHandleListRequest(br,argv,argc);
     } else if (argv[0][sdslen(argv[0])-1] == '?') {
-        /* $list? */
-        botHandleShowPortfolioRequest(br,argv);
+        /* $list? [pl] */
+        if (argc == 1)
+            botHandleShowPortfolioRequest(br,argv);
+        else if (argc == 2 && !strcasecmp(argv[1],"pl"))
+            botHandleShowProfitLossRequest(br,argv);
+        else
+            botSendMessage(br->target,
+                "Use '$listname?' or '$listname? pl'",0);
     } else if (argc == 1 && strcasecmp(argv[0],"help")) {
         /* $AAPL */
         botHandlePriceRequest(br,argv[0]);
@@ -1724,9 +1828,11 @@ void *botHandleRequest(void *arg) {
 "$mylist: buy AAPL 10@50  | Add 10 AAPL stocks at 50$ each.\n"
 "$mylist: buy AAPL 20     | Add 20 AAPL stocks at current price.\n"
 "$mylist: buy AAPL        | Add 1 AAPL stocks at current price.\n"
-"$mylist: sell AAPL 10    | Remove 10 AAPL stocks.\n"
-"$mylist: sell AAPL       | Remove all AAPL stocks.\n"
+"$mylist: sell AAPL 10@35 | Sell 10 AAPL stocks at 35$ each.\n"
+"$mylist: sell AAPL 10    | Sell 10 AAPL stocks at current price.\n"
+"$mylist: sell AAPL       | Sell all AAPL stocks at current price.\n"
 "$mylist?                 | Show portfolio associated with mylist.\n"
+"$mylist? pl              | Show portfolio profit and loss.\n"
 "$$ ls                    | Show all the lists available.\n"
 "```\n",0);
     } else {
