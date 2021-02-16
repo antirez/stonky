@@ -367,7 +367,7 @@ int sqlNextRow(sqlRow *row) {
 
     xfree(row->col);
     row->cols = sqlite3_data_count(row->stmt);
-    row->col = xmalloc(sizeof(row->cols)*sizeof(sqlCol));
+    row->col = xmalloc(row->cols*sizeof(sqlCol));
     for (int j = 0; j < row->cols; j++) {
         row->col[j].type = sqlite3_column_type(row->stmt,j);
         if (row->col[j].type == SQLITE_INTEGER) {
