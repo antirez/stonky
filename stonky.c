@@ -1892,7 +1892,7 @@ void *botHandleRequest(void *arg) {
 "$mylist: sell AAPL       | Sell all AAPL stocks at current price.\n"
 "$mylist?                 | Show portfolio associated with mylist.\n"
 "$mylist? pl              | Show portfolio profit and loss.\n"
-"$$ ls                    | Show all the lists available.\n"
+"$$ ls                    | Show all the available lists.\n"
 "```\n",0);
     } else {
         botSendMessage(br->target,
