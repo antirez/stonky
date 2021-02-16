@@ -1536,12 +1536,21 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
             reply = sdscatprintf(sdsempty(),"No such list %s", listname);
         } else {
             reply = sdscatprintf(sdsempty(),"Prices for list %s:\n", listname);
+            double avg = 0;
+            int fetched = 0;
             for (int j = 0; j < numstocks; j++) {
                 ydata *yd = getYahooData(YDATA_QUOTE,stocks[j],NULL,NULL);
+                if (yd) {
+                    fetched++;
+                    avg += strtod(yd->regchange,NULL);
+                }
                 reply = sdsCatPriceRequest(reply,stocks[j],yd,STONKY_SHORT);
                 freeYahooData(yd);
                 reply = sdscat(reply,"\n");
             }
+            if (fetched)
+                reply = sdscatprintf(reply,"Average performance: %.2f%%:\n",
+                                     avg/fetched);
         }
         sdsfreesplitres(stocks,numstocks);
     } else if (!strcasecmp(argv[1],"buy") && (argc == 3 || argc == 4)) {
