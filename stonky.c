@@ -1662,7 +1662,7 @@ void botHandleShowPortfolioRequest(botRequest *br, sds *argv) {
             gp -= 10;
         } while(gp >= 10);
 
-        reply = sdscatprintf(reply,"%-5s | %-3d | %s%.2f (%s%.2f%%) %s\n",
+        reply = sdscatprintf(reply,"%-7s | %-3d | %s%.2f (%s%.2f%%) %s\n",
             pack->symbol,
             (int)pack->quantity,
             (pack->gain >= 0) ? "+" : "",
@@ -1682,17 +1682,26 @@ cleanup:
 }
 
 /* Turn an Unix time into a string in the form "x days|months|..." */
-sds sdsTimeAgo(time_t t) {
+sds sdsTimeAgo(time_t attime) {
+    double t = time(NULL) - attime;
     char *unit;
-    if (t >= 3600*24*30) {
+    int fraction = 0; /* Use fractional part. >= hours. */
+    if (t >= 3600*24*365) {
+        t /= 3600*24*365;
+        unit = "year";
+        fraction = 1;
+    } else if (t >= 3600*24*30) {
         t /= 3600*24*30;
         unit = "month";
+        fraction = 1;
     } else if (t >= 3600*24) {
         t /= 3600*24;
         unit = "day";
+        fraction = 1;
     } else if (t >= 3600) {
         t /= 3600;
         unit = "hour";
+        fraction = 1;
     } else if (t >= 60) {
         t /= 60;
         unit = "minute";
@@ -1700,7 +1709,11 @@ sds sdsTimeAgo(time_t t) {
         unit = "second";
     }
 
-    sds s = sdscatprintf(sdsempty(),"%ld %s", (long)t, unit);
+    sds s;
+    if (fraction)
+        s = sdscatprintf(sdsempty(),"%.1f %s", t, unit);
+    else
+        s = sdscatprintf(sdsempty(),"%ld %s", (long)t, unit);
     if (t > 1) s = sdscat(s,"s"); /* Pluralize if needed. */
     return s;
 }
@@ -1718,7 +1731,7 @@ void botHandleShowProfitLossRequest(botRequest *br, sds *argv) {
 
     sqlRow row;
     if (sqlSelect(&row,"SELECT * FROM ProfitLoss WHERE listid=?i "
-                       "ORDER BY selltime", listid) != SQLITE_ROW)
+                       "ORDER BY selltime DESC", listid) != SQLITE_ROW)
     {
         reply = sdsnew("No sells history for this portfolio");
         goto cleanup;
@@ -1737,7 +1750,7 @@ void botHandleShowProfitLossRequest(botRequest *br, sds *argv) {
         const char *csym = row.col[6].s;
         sds ago = sdsTimeAgo(selltime);
         reply = sdscatprintf(reply,
-            "%-5s: %d stocks sold for %f%s (P/L %s%f %s%f%%), %s\n",
+            "%-7s: %d sold at %.2f%s (P/L %s%.2f %s%.2f%%), %s ago\n",
             symbol, quantity, sellprice*quantity, csym,
             (diff >= 0) ? "+" : "", diff,
             (diffperc >= 0) ? "+" : "", diffperc,
