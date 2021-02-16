@@ -919,12 +919,16 @@ int dbDelStockFromList(const char *listname, const char *symbol, int dellist) {
 
 /* This represents bought stocks associated with a symbol in a given list.
  * It is used by multiple functions in order to manipulate portfolios. */
+#define CURRENCY_UNKNOWN 0
+#define CURRENCY_USD 1
+#define CURRENCY_EUR 2
 typedef struct stockpack {
     int64_t rowid;
     int64_t stockid;
     int64_t quantity;
     double avgprice;
     /* Only filled by dbGetPortfolio. */
+    int currency;
     char symbol[64];
     double gain, gainperc;
     double daygain, daygainperc;
@@ -935,6 +939,12 @@ typedef struct stockpack {
  * info from Yahoo. On success C_OK is returned, otherwise C_ERR. */
 int populateStockPackInfo(stockpack *pack, const char *symbol) {
     ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
+
+    size_t len = strlen(symbol);
+    if (len >= sizeof(pack->symbol)) len = sizeof(pack->symbol)-1;
+    memcpy(pack->symbol,symbol,len);
+    pack->symbol[len] = 0;
+
     if (yd) {
         double daychange = strtod(yd->regchange,NULL);
         double payed = pack->quantity * pack->avgprice;
@@ -944,6 +954,10 @@ int populateStockPackInfo(stockpack *pack, const char *symbol) {
         pack->gainperc = (value/payed-1)*100;
         pack->daygainperc = daychange;
         pack->daygain = value / 100 * daychange;
+        if (yd->csym[0] == '$')
+            pack->currency = CURRENCY_USD;
+        else if (strlen(yd->csym) == 3 && !memcmp(yd->csym,"\xe2\x82\xac",3))
+            pack->currency = CURRENCY_EUR;
         freeYahooData(yd);
         return C_OK;
     } else {
@@ -975,10 +989,6 @@ stockpack *dbGetPortfolio(const char *listname, int *count) {
         stockpack *pack = packs+rows;
         memset(pack,0,sizeof(stockpack));
         const char *symbol = row.col[0].s;
-        size_t len = row.col[0].i;
-        if (len >= sizeof(pack->symbol)) len = sizeof(packs->symbol)-1;
-        memcpy(pack->symbol,symbol,len);
-        pack->symbol[len] = 0;
         pack->quantity = row.col[1].i;
         pack->avgprice = row.col[2].d;
         /* Compute the gain. */
@@ -1653,8 +1663,18 @@ void botHandleShowPortfolioRequest(botRequest *br, sds *argv) {
 
     /* Build the reply composed of all the stocks. */
     reply = sdsnew("```\n");
+    double totalvalue = 0;
+    double totalpayed = 0;
     for (int j = 0; j < count; j++) {
         stockpack *pack = packs+j;
+        double value = pack->value;
+        double payed = pack->quantity * pack->avgprice;
+        if (pack->currency == CURRENCY_EUR) {
+            value *= EURUSD;
+            payed *= EURUSD;
+        }
+        totalvalue += value;
+        totalpayed += payed;
         sds emoji = sdsempty();
 
         /* One symbol for every 10% of change. */
@@ -1674,6 +1694,11 @@ void botHandleShowPortfolioRequest(botRequest *br, sds *argv) {
             emoji);
         sdsfree(emoji);
     }
+    double totalgain = totalvalue-totalpayed;
+    double totalgainperc = (totalvalue/totalpayed-1)*100;
+    reply = sdscatprintf(reply,"Total: %s%.2fUSD (%s%.2f%%)",
+                        totalgain > 0 ? "+" : "", totalgain,
+                        totalgainperc > 0 ? "+" : "", totalgainperc);
     reply = sdscat(reply,"```");
 
 cleanup:
