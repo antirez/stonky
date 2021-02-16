@@ -67,6 +67,7 @@ _Thread_local sqlite3 *dbHandle = NULL; /* Per-thread sqlite handle. */
 sds BotApiKey = NULL;
 sds *Symbols; /* Global list of symbols loaded from marketdata/symbols.txt */
 int NumSymbols; /* Number of elements in Symbols. */
+_Atomic double EURUSD = 0; /* EURUSD change, refreshed in background. */
 
 /* ============================================================================
  * Allocator wrapper: we want to exit on OOM instead of trying to recover.
@@ -1738,6 +1739,7 @@ void botHandleShowProfitLossRequest(botRequest *br, sds *argv) {
     }
 
     /* Build the reply with the history of sells. */
+    double total = 0;
     reply = sdsnew("```\n");
     while(sqlNextRow(&row)) {
         const char *symbol = row.col[0].s;
@@ -1746,17 +1748,35 @@ void botHandleShowProfitLossRequest(botRequest *br, sds *argv) {
         double buyprice = row.col[4].d;
         double sellprice = row.col[5].d;
         double diff = (sellprice-buyprice)*quantity;
-        double diffperc = ((buyprice/sellprice)-1)*100;
+        double diffperc = ((sellprice/buyprice)-1)*100;
         const char *csym = row.col[6].s;
         sds ago = sdsTimeAgo(selltime);
+
+        /* One symbol for every 10% of change. */
+        double aux = fabs(diffperc);
+        sds emoji = sdsempty();
+        do {
+            emoji = sdscat(emoji, (diffperc >= 0) ? "🍀":"🍄");
+            aux -= 10;
+        } while(aux >= 10);
+
         reply = sdscatprintf(reply,
-            "%-7s: %d sold at %.2f%s (P/L %s%.2f %s%.2f%%), %s ago\n",
+            "%-7s: %d sold at %.2f%s (P/L %s%.2f %s%.2f%% %s), %s ago\n",
             symbol, quantity, sellprice*quantity, csym,
             (diff >= 0) ? "+" : "", diff,
             (diffperc >= 0) ? "+" : "", diffperc,
-            ago);
+            emoji, ago);
         sdsfree(ago);
+        sdsfree(emoji);
+
+        /* Calculate the total P/L of the portfolio. */
+        if (csym[0] == '$')
+            total += diff;
+        else
+            total += diff * EURUSD;
     }
+    reply = sdscatprintf(reply,"Total portfolio performance: %s%.2f USD\n",
+                         total > 0 ? "+" : "", total);
     reply = sdscat(reply,"```");
 
 cleanup:
@@ -2075,15 +2095,35 @@ void *scanStocksThread(void *arg) {
     return NULL;
 }
 
+/* This thread for now only refreshes EUR/USD change every few seconds. */
+void *cvThread(void *arg) {
+    UNUSED(arg);
+    while(1) {
+        ydata *yd = getYahooData(YDATA_QUOTE,"EURUSD=X",NULL,NULL);
+        if (yd) EURUSD = yd->reg;
+        freeYahooData(yd);
+        sleep(10);
+    }
+}
+
 /* Start background threads continuously doing certain tasks. */
 void startBackgroundTasks(void) {
     pthread_t tid;
+
+    /* Autolists thread. */
     if (Symbols && autolistsMode) {
         if (pthread_create(&tid,NULL,scanStocksThread,NULL) != 0) {
             printf("Can't create the thread to scan stocks "
                    "on the background\n");
             exit(1);
         }
+    }
+
+    /* Cached valuations thread. */
+    if (pthread_create(&tid,NULL,cvThread,NULL) != 0) {
+        printf("Can't create the thread to scan stocks "
+               "on the background\n");
+        exit(1);
     }
 }
 
