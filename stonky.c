@@ -1548,9 +1548,11 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
                 freeYahooData(yd);
                 reply = sdscat(reply,"\n");
             }
-            if (fetched)
-                reply = sdscatprintf(reply,"Average performance: %.2f%%:\n",
-                                     avg/fetched);
+            if (fetched) {
+                reply = sdscatprintf(reply,
+                    "%d stocks. Average performance: %.2f%%:\n",
+                    fetched, avg/fetched);
+            }
         }
         sdsfreesplitres(stocks,numstocks);
     } else if (!strcasecmp(argv[1],"buy") && (argc == 3 || argc == 4)) {
