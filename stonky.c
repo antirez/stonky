@@ -1154,6 +1154,10 @@ int dbSellStocks(const char *listname, const char *symbol, int quantity, double 
     }
     if (quantity == 0) quantity = sp->quantity;
 
+    /* Finally update. */
+    sp->quantity -= quantity;
+    if (sp->quantity < 0) return C_ERR; /* Not enough stocks. */
+
     /* Create a profit and loss entry with this selling. */
     int64_t listid = dbGetListID(listname,0);
     if (listid) {
@@ -1162,9 +1166,6 @@ int dbSellStocks(const char *listname, const char *symbol, int quantity, double 
             sellprice, csym);
     }
 
-    /* Finally update. */
-    sp->quantity -= quantity;
-    if (sp->quantity < 0) return C_ERR; /* Not enough stocks. */
     return dbUpdateStockPack(sp);
 }
 
