@@ -69,6 +69,7 @@ sds BotApiKey = NULL;
 sds *Symbols; /* Global list of symbols loaded from marketdata/symbols.txt */
 int NumSymbols; /* Number of elements in Symbols. */
 _Atomic double EURUSD = 0; /* EURUSD change, refreshed in background. */
+int ScanPause = 1000000;   /* In microseconds. Default 1 second. */
 
 /* Global stats. Sometimes we access such stats from threads without caring
  * about race conditions, since they in practice are very unlikely to happen
@@ -1317,6 +1318,17 @@ int dbSellStocks(const char *listname, const char *symbol, int quantity, double 
     return dbUpdateStockPack(sp);
 }
 
+/* Completely remove a list: the associated stocks, packs, sells, and the
+ * list name itself. */
+void dbDestroyList(const char *listname) {
+    int64_t listid = dbGetListID(listname,0);
+    if (listid == 0) return;
+    sqlQuery("DELETE FROM StockPack WHERE liststockid IN (SELECT rowid FROM ListStock WHERE listid=?i)",listid);
+    sqlQuery("DELETE FROM ListStock WHERE listid=?i",listid);
+    sqlQuery("DELETE FROM ProfitLoss WHERE listid=?i",listid);
+    sqlQuery("DELETE FROM Lists WHERE rowid=?i",listid);
+}
+
 /* =========================================================================
  * Data analysis algorithms
  * ========================================================================= */
@@ -2163,6 +2175,14 @@ void *botHandleRequest(void *arg) {
                          again at the next restart. */
             printf("Exiting by user request.\n");
             exit(0);
+        } else if (argc == 4 &&
+                   adminPass != NULL &&
+                   !strcasecmp(argv[1],"destroy") &&
+                   !strcasecmp(argv[3],adminPass))
+        {
+            /* $$ destroy <listname> <password> */
+            botSendMessage(br->target, "Destroying list...",0);
+            dbDestroyList(argv[2]);
         } else if (argc == 2 && !strcasecmp(argv[1],"info")) {
             /* $$ info */
             char buf[1024];
@@ -2363,7 +2383,8 @@ void *scanStocksThread(void *arg) {
     Symbols[1] = "AAPL";
     Symbols[2] = "SHOP";
     Symbols[3] = "AMZN";
-    NumSymbols = 4;
+    Symbols[4] = "RIOT";
+    NumSymbols = 5;
 #endif
 
     while(1) {
@@ -2387,28 +2408,32 @@ void *scanStocksThread(void *arg) {
         /* Compute Montecarlo two times, for the last year, and for
          * the last two months, detecting big changes. */
         mcres mcvl, mclong, mcshort, mcvs, mcday;
+        volres vol;
         computeMontecarlo(yd,253*5,1000,5,&mcvl);
         computeMontecarlo(yd,253,1000,5,&mclong);
         computeMontecarlo(yd,50,1000,5,&mcshort);
         computeMontecarlo(yd,20,1000,5,&mcvs);
         computeMontecarlo(yd,10,1000,1,&mcday);
+        computeVolatility(yd,10,&vol);
 
         /* Cache the stock data we want to use later, then free the
          * API data. */
-        double five_years_min = yd->ts_min;
+        double price = yd->reg;
         freeYahooData(yd);
 
         int showstats = debugMode ? 1 : 0;
         if (verboseMode)
             printf(
             "Scanning %s: VL%.2f(+-%.2f%%) -> L%.2f(+-%.2f%%) ->\n"
-            "         S%.2f(+-%.2f%%) -> VS%.2f(+-%.2f%%) -> D%.2f(+-%.2f%%)\n",
-                symbol,
+            "         S%.2f(+-%.2f%%) -> VS%.2f(+-%.2f%%) -> D%.2f(+-%.2f%%)\n"
+            "         LD %d PD %d\n"
+                ,symbol,
                 mcvl.gain, mcvl.absdiffper,
                 mclong.gain, mclong.absdiffper,
                 mcshort.gain, mcshort.absdiffper,
                 mcvs.gain, mcvs.absdiffper,
-                mcday.gain, mcday.absdiffper);
+                mcday.gain, mcday.absdiffper,
+                (int)vol.ldays, (int)vol.pdays);
 
         if (mclong.gain < mcshort.gain &&
             mcshort.gain <  mcvs.gain &&
@@ -2429,15 +2454,25 @@ void *scanStocksThread(void *arg) {
             mcshort.gain > 3 &&
             mcvs.gain > 4 &&
             mcday.gain > 1 &&
-            mcday.absdiffper < 100 &&
-            five_years_min > 5)
+            price > 40)
         {
             printf("evenbetter: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("evenbetter", symbol);
             showstats=1;
+        } else if (
+            mclong.gain > 0.5 &&
+            mcshort.gain > 3 &&
+            mcvs.gain > 3 &&
+            vol.ldays == 0 &&
+            price > 40)
+        {
+            printf("unstoppable: %d/%d %s\n",j,NumSymbols,symbol);
+            dbAddStockToList("unstoppable", symbol);
+            showstats=1;
         } else {
             dbDelStockFromList("tothemoon", symbol, 0);
             dbDelStockFromList("evenbetter", symbol, 0);
+            dbDelStockFromList("unstoppable", symbol, 0);
         }
 
         if (showstats) {
@@ -2455,7 +2490,7 @@ void *scanStocksThread(void *arg) {
                 mcvs.maxgain, mcday.gain, mcday.absdiff, mcday.absdiffper,
                 mcday.mingain, mcday.maxgain);
         }
-        sleep(1);
+        usleep(ScanPause);
     }
     dbClose();
     return NULL;
@@ -2558,10 +2593,14 @@ int main(int argc, char **argv) {
             dbFile = argv[++j];
         } else if (!strcmp(argv[j],"--adminpass") && morearg) {
             adminPass = argv[++j];
+        } else if (!strcmp(argv[j],"--scanpause") && morearg) {
+            ScanPause = atoi(argv[++j]);
+            if (ScanPause < 0) ScanPause = 0;
         } else {
             printf(
             "Usage: %s [--apikey <apikey>] [--debug] [--verbose] "
-            "[--noautolists] [--dbfile <filename>]\n",argv[0]);
+            "[--noautolists] [--dbfile <filename>] [--scanpause <usec>]"
+            "\n",argv[0]);
             exit(1);
         }
     }
