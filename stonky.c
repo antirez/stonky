@@ -1532,6 +1532,9 @@ void botHandleMontecarloRequest(botRequest *br, sds symbol, sds *argv, int argc)
                 "A period of 0 (default) means to use a random period "
                 "between buy and sell. The default range is 365 days.");
             goto cleanup;
+        } else {
+            reply = sdsnew("Syntax error. Try $AAPL mc help");
+            goto cleanup;
         }
     }
 
@@ -1598,6 +1601,9 @@ void botHandleVolatilityRequest(botRequest *br, sds symbol, sds *argv, int argc)
             reply = sdsnew(
                 "`$SYMBOL vol [range <days>]`\n"
                 "The default range is one year (253 open market days).");
+            goto cleanup;
+        } else {
+            reply = sdsnew("Syntax error. Try $AAPL vol help");
             goto cleanup;
         }
     }
@@ -2049,12 +2055,12 @@ void *botHandleRequest(void *arg) {
                              !strcasecmp(argv[1],"montecarlo")))
     {
         /* $AAPL mc | montecarlo [options] */
-        botHandleMontecarloRequest(br,argv[0],argv+1,argc-1);
+        botHandleMontecarloRequest(br,argv[0],argv+2,argc-2);
     } else if (argc >= 2 && (!strcasecmp(argv[1],"vol") ||
                              !strcasecmp(argv[1],"volatility")))
     {
         /* $AAPL vol | volatility [options] */
-        botHandleVolatilityRequest(br,argv[0],argv+1,argc-1);
+        botHandleVolatilityRequest(br,argv[0],argv+2,argc-2);
     } else if (argc >= 1 && !strcasecmp(argv[0],"help")) {
         /* $HELP */
         botSendMessage(br->target,
