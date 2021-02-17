@@ -70,6 +70,16 @@ sds *Symbols; /* Global list of symbols loaded from marketdata/symbols.txt */
 int NumSymbols; /* Number of elements in Symbols. */
 _Atomic double EURUSD = 0; /* EURUSD change, refreshed in background. */
 
+/* Global stats. Sometimes we access such stats from threads without caring
+ * about race conditions, since they in practice are very unlikely to happen
+ * in most archs with this data types, and even so we don't care.
+ * This stuff is reported by the bot when the $$ info command is used. */
+struct {
+    time_t start_time;      /* Unix time the bot was started. */
+    uint64_t queries;       /* Number of queries received. */
+    uint64_t scanned;       /* Number of stocks scanned by the BG thread. */
+} botStats;
+
 /* ============================================================================
  * Allocator wrapper: we want to exit on OOM instead of trying to recover.
  * ==========================================================================*/
@@ -1883,6 +1893,16 @@ void *botHandleRequest(void *arg) {
                          again at the next restart. */
             printf("Exiting by user request.\n");
             exit(0);
+        } else if (argc == 2 && !strcasecmp(argv[1],"info")) {
+            /* $$ info */
+            char buf[1024];
+            sds ago = sdsTimeAgo(botStats.start_time);
+            snprintf(buf,sizeof(buf),"Hey, I was started %s ago, served %llu queries and scanned, in the background, %llu stocks seraching for good ones.",
+                ago,
+                (unsigned long long)botStats.queries,
+                (unsigned long long)botStats.scanned);
+            sdsfree(ago);
+            botSendMessage(br->target,buf,0);
         } else {
             botSendMessage(br->target,
                 "Invalid control command or bad password, try $HELP",0);
@@ -1994,6 +2014,7 @@ int64_t botProcessUpdates(int64_t offset, int timeout) {
         if (time(NULL)-timestamp > 60*5) continue;
 
         /* Spawn a thread that will handle the request. */
+        botStats.queries++;
         sds request = sdsnew(text->valuestring+1);
         botRequest *bt = createBotRequest();
         bt->request = request;
@@ -2070,6 +2091,7 @@ void *scanStocksThread(void *arg) {
 
     while(1) {
         sds symbol = Symbols[j % NumSymbols];
+        botStats.scanned++;
         j++;
 
         /* Fetch 5y of data. Abort if we have less than 250 prices. */
@@ -2234,6 +2256,12 @@ void readApiKeyFromFile(void) {
     BotApiKey = sdstrim(BotApiKey," \t\r\n");
 }
 
+void resetBotStats(void) {
+    botStats.start_time = time(NULL);
+    botStats.queries = 0;
+    botStats.scanned = 0;
+}
+
 int main(int argc, char **argv) {
     srand(time(NULL));
 
@@ -2270,6 +2298,7 @@ int main(int argc, char **argv) {
                "apikey.txt in the bot working directory.\n");
         exit(1);
     }
+    resetBotStats();
     dbHandle = dbInit(1);
     if (dbHandle == NULL) exit(1);
     cJSON_Hooks jh = {.malloc_fn = xmalloc, .free_fn = xfree};
