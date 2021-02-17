@@ -62,7 +62,7 @@
 int autolistsMode = 1; /* Scan to populate auto lists. */
 int debugMode = 0; /* If true enables debugging info (--debug option). */
 int verboseMode = 0; /* If true enables verbose info (--verbose && --debug) */
-char *dbFile = "/tmp/stonky.sqlite";    /* Change with --dbfile. */
+char *dbFile = "./stonky.sqlite";    /* Change with --dbfile. */
 _Thread_local sqlite3 *dbHandle = NULL; /* Per-thread sqlite handle. */
 sds BotApiKey = NULL;
 sds *Symbols; /* Global list of symbols loaded from marketdata/symbols.txt */
@@ -2233,10 +2233,12 @@ int main(int argc, char **argv) {
             verboseMode = 1;
         } else if (!strcmp(argv[j],"--apikey") && morearg) {
             BotApiKey = sdsnew(argv[++j]);
+        } else if (!strcmp(argv[j],"--dbfile") && morearg) {
+            dbFile = argv[++j];
         } else {
             printf(
             "Usage: %s [--apikey <apikey>] [--debug] [--verbose] "
-            "[--noautolists]\n",argv[0]);
+            "[--noautolists] [--dbfile <filename>]\n",argv[0]);
             exit(1);
         }
     }
