@@ -1672,6 +1672,16 @@ void botHandleShowPortfolioRequest(botRequest *br, sds *argv) {
         goto cleanup;
     }
 
+    /* Check if to convert to USD: do it only if there are also USD
+     * assets. */
+    int tousd = 0;
+    for (int j = 0; j < count; j++) {
+        if (packs[j].currency != CURRENCY_EUR) {
+            tousd = 1;
+            break;
+        }
+    }
+
     /* Build the reply composed of all the stocks. */
     reply = sdsnew("```\n");
     double totalvalue = 0;
@@ -1680,7 +1690,7 @@ void botHandleShowPortfolioRequest(botRequest *br, sds *argv) {
         stockpack *pack = packs+j;
         double value = pack->value;
         double payed = pack->quantity * pack->avgprice;
-        if (pack->currency == CURRENCY_EUR) {
+        if (tousd && pack->currency == CURRENCY_EUR) {
             value *= EURUSD;
             payed *= EURUSD;
         }
@@ -1707,8 +1717,12 @@ void botHandleShowPortfolioRequest(botRequest *br, sds *argv) {
     }
     double totalgain = totalvalue-totalpayed;
     double totalgainperc = (totalvalue/totalpayed-1)*100;
-    reply = sdscatprintf(reply,"Total: %s%.2fUSD (%s%.2f%%)",
+    reply = sdscatprintf(reply,"Total value: %.2f%s\n",
+                        totalvalue,
+                        tousd ? "$" : "€");
+    reply = sdscatprintf(reply,"Total P/L  : %s%.2f%s (%s%.2f%%)",
                         totalgain > 0 ? "+" : "", totalgain,
+                        tousd ? "$" : "€",
                         totalgainperc > 0 ? "+" : "", totalgainperc);
     reply = sdscat(reply,"```");
 
