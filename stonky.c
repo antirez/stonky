@@ -1190,6 +1190,180 @@ int dbSellStocks(const char *listname, const char *symbol, int quantity, double 
     return dbUpdateStockPack(sp);
 }
 
+/* =========================================================================
+ * Data analysis algorithms
+ * ========================================================================= */
+
+/* Check if the specified time series data has more than 'maxperc' of
+ * elements that are set to zero. If the zeroes are > maxperc, C_ERR is
+ * returned, otherwise C_OK is returned. */
+int checkYahooTimeSeriesValidity(ydata *yd, int maxperc) {
+    int nulls = 0;
+    for (int j = 0; j < yd->ts_len; j++)
+        nulls += yd->ts_data[j] == 0;
+    return (nulls > yd->ts_len/maxperc) ? C_ERR : C_OK;
+}
+
+/* Structure used by computeMonteCarlo() to return the results. */
+typedef struct {
+    double gain;    /* Average gain. */
+    double mingain, maxgain;    /* Minimum and maximum gains. */
+    double absdiff; /* Average of absolute difference of gains. */
+    double absdiffper; /* Percentage of absdiff compared to gain. */
+    double avgper;  /* Average period of buy/sell action, in days. */
+} mcres;
+
+/* Perform a Montecarlo simulation where the stock is bought and sold
+ * at random days within the specified:
+ *
+ *  range: last N days where to perform the experiment.
+ *  count: number of experiments.
+ *  period: number of days between experiments, if 0 it is random.
+ *
+ * The result is stored in the mcres structure passed by reference. */
+void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
+    int buyday, sellday;
+    double total_gain = 0;
+    double total_interval = 0;
+    float *data = yd->ts_data;
+
+    if (range > yd->ts_len) range = yd->ts_len;
+    else if (range < yd->ts_len) data += yd->ts_len-range;
+    double *gains = xmalloc(sizeof(double)*count);
+
+    /* The period (days of difference) between buy and sell must always
+     * be less than the range (total days considered). If we have a range
+     * of 2 days, the maximum period must be 1 in order to buy and
+     * sell in the only two days that are 1 day apart. */
+    if (period >= range) period = range-1;
+
+    for (int j = 0; j < count; j++) {
+        /* We want to pick two different days, and since the API sometimes
+         * return data with fields set to zero, also make sure that
+         * we pick non-zero days. */
+        int maxtries; /* To avoid infinite loops when picking days. */
+        if (period == 0) {
+            /* Random days. */
+            maxtries = 10;
+            do {
+                buyday = rand() % range;
+            } while (data[buyday] == 0 && maxtries--);
+
+            maxtries = 10;
+            do {
+                sellday = rand() % range;
+            } while((sellday == buyday || data[sellday] == 0) &&
+                    maxtries--);
+
+            if (buyday > sellday) {
+                int t = buyday;
+                buyday = sellday;
+                sellday = t;
+            }
+        } else {
+            /* Fixed days interval. Pick the first days at random, then
+             * use the offset to pick the other. Note that period < range
+             * since we checked at the function entry. */
+            maxtries = 10;
+            do {
+                buyday = rand() % (range-period);
+                sellday = buyday+period;
+            } while (data[buyday] == 0 && data[sellday] == 0 && maxtries--);
+        }
+
+        double buy_price = data[buyday];
+        double sell_price = data[sellday];
+
+        /* Sometimes Yahoo prices are null. Don't use bad data. */
+        if (buy_price == 0 || sell_price == 0) {
+            gains[j] = 0;
+            total_interval += sellday-buyday;
+            continue;
+        }
+
+        double gain = (sell_price-buy_price)/buy_price*100;
+        gains[j] = gain;
+        if (debugMode) {
+            printf("Montecarlo buy (%d) %f sell (%d) %f: %f\n",
+                buyday, buy_price, sellday, sell_price, gain);
+        }
+        total_gain += gain;
+        total_interval += sellday-buyday;
+    }
+    mc->gain = total_gain / count;
+    mc->avgper = total_interval / count;
+
+    /* Scan the array of gains to calculate the average gain difference,
+     * as long as min/max values. */
+    mc->absdiff = 0;
+    for (int j = 0; j < count; j++) {
+        mc->absdiff += fabs(mc->gain - gains[j]);
+        if (j == 0) {
+            mc->mingain = gains[j];
+            mc->maxgain = gains[j];
+        } else {
+            if (gains[j] < mc->mingain) mc->mingain = gains[j];
+            if (gains[j] > mc->maxgain) mc->maxgain = gains[j];
+        }
+    }
+    mc->absdiff /= count;
+    mc->absdiffper = mc->absdiff/fabs(mc->gain)*100;
+    xfree(gains);
+}
+
+/* Structure used by computeVolatility() to return the results. */
+typedef struct {
+    int64_t pdays;  /* Days with a profit. */
+    int64_t ldays;  /* Days with a loss. */
+    double avgp;    /* Average profit of days with a profit. */
+    double avgl;    /* Average loss of days with a loss. */
+    double maxp;    /* Max profit in a day. */
+    double maxl;    /* Max loss in a day. */
+} volres;
+
+/* This function computes some volatility statistics. It uses a different
+ * approach compared to the classical one, by checking what is the average
+ * percentage the stock gains, when it gains, loses, with it loses, and
+ * also taking into account what is the maximum loss and gain in percentage
+ * on the specified last "range" days of trading. */
+void computeVolatility(ydata *yd, int range, volres *vr) {
+    if (range > yd->ts_len) range = yd->ts_len;
+    double pval = 0; /* Previous sample value. */
+
+    /* Intialize the result set. */
+    vr->pdays = 0;
+    vr->ldays = 0;
+    vr->avgp = 0;
+    vr->avgl = 0;
+    vr->maxp = 0;
+    vr->maxl = 0;
+
+    /* Analyze from the first to the last day in the range. */
+    for (int j = range-1; j >= 0; j--) {
+        double val = yd->ts_data[yd->ts_len-j-1];
+        if (pval == 0) {
+            pval = val;
+            continue;
+        }
+
+        /* Compute the PL percentage between the previous and current
+         * day of trading. */
+        double pl = ((val/pval)-1)*100;
+        if (pl > 0) {
+            vr->pdays++;
+            vr->avgp += pl;
+            if (pl > vr->maxp) vr->maxp = pl;
+        } else {
+            vr->ldays++;
+            vr->avgl += pl;
+            if (pl < vr->maxl) vr->maxl = pl;
+        }
+        pval = val;
+    }
+    if (vr->pdays) vr->avgp /= vr->pdays;
+    if (vr->ldays) vr->avgl /= vr->ldays;
+}
+
 /* =============================================================================
  * Bot commands implementations
  * ===========================================================================*/
@@ -1331,129 +1505,12 @@ fmterr:
     sdsfree(reply);
 }
 
-/* Check if the specified time series data has more than 'maxperc' of
- * elements that are set to zero. If the zeroes are > maxperc, C_ERR is
- * returned, otherwise C_OK is returned. */
-int checkYahooTimeSeriesValidity(ydata *yd, int maxperc) {
-    int nulls = 0;
-    for (int j = 0; j < yd->ts_len; j++)
-        nulls += yd->ts_data[j] == 0;
-    return (nulls > yd->ts_len/maxperc) ? C_ERR : C_OK;
-}
-
-/* Structure used by computeMonteCarlo() to return the results. */
-typedef struct {
-    double gain;    /* Average gain. */
-    double mingain, maxgain;    /* Minimum and maximum gains. */
-    double absdiff; /* Average of absolute difference of gains. */
-    double absdiffper; /* Percentage of absdiff compared to gain. */
-    double avgper;  /* Average period of buy/sell action, in days. */
-} mcres;
-
-/* Perform a Montecarlo simulation where the stock is bought and sold
- * at random days within the specified:
- *
- *  range: last N days where to perform the experiment.
- *  count: number of experiments.
- *  period: number of days between experiments, if 0 it is random.
- *
- * The result is stored in the mcres structure passed by reference. */
-void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
-    int buyday, sellday;
-    double total_gain = 0;
-    double total_interval = 0;
-    float *data = yd->ts_data;
-
-    if (range > yd->ts_len) range = yd->ts_len;
-    else if (range < yd->ts_len) data += yd->ts_len-range;
-    double *gains = xmalloc(sizeof(double)*count);
-
-    /* The period (days of difference) between buy and sell must always
-     * be less than the range (total days considered). If we have a range
-     * of 2 days, the maximum period must be 1 in order to buy and
-     * sell in the only two days that are 1 day apart. */
-    if (period >= range) period = range-1;
-
-    for (int j = 0; j < count; j++) {
-        /* We want to pick two different days, and since the API sometimes
-         * return data with fields set to zero, also make sure that
-         * we pick non-zero days. */
-        int maxtries; /* To avoid infinite loops when picking days. */
-        if (period == 0) {
-            /* Random days. */
-            maxtries = 10;
-            do {
-                buyday = rand() % range;
-            } while (data[buyday] == 0 && maxtries--);
-
-            maxtries = 10;
-            do {
-                sellday = rand() % range;
-            } while((sellday == buyday || data[sellday] == 0) &&
-                    maxtries--);
-
-            if (buyday > sellday) {
-                int t = buyday;
-                buyday = sellday;
-                sellday = t;
-            }
-        } else {
-            /* Fixed days interval. Pick the first days at random, then
-             * use the offset to pick the other. Note that period < range
-             * since we checked at the function entry. */
-            maxtries = 10;
-            do {
-                buyday = rand() % (range-period);
-                sellday = buyday+period;
-            } while (data[buyday] == 0 && data[sellday] == 0 && maxtries--);
-        }
-
-        double buy_price = data[buyday];
-        double sell_price = data[sellday];
-
-        /* Sometimes Yahoo prices are null. Don't use bad data. */
-        if (buy_price == 0 || sell_price == 0) {
-            gains[j] = 0;
-            total_interval += sellday-buyday;
-            continue;
-        }
-
-        double gain = (sell_price-buy_price)/buy_price*100;
-        gains[j] = gain;
-        if (debugMode) {
-            printf("Montecarlo buy (%d) %f sell (%d) %f: %f\n",
-                buyday, buy_price, sellday, sell_price, gain);
-        }
-        total_gain += gain;
-        total_interval += sellday-buyday;
-    }
-    mc->gain = total_gain / count;
-    mc->avgper = total_interval / count;
-
-    /* Scan the array of gains to calculate the average gain difference,
-     * as long as min/max values. */
-    mc->absdiff = 0;
-    for (int j = 0; j < count; j++) {
-        mc->absdiff += fabs(mc->gain - gains[j]);
-        if (j == 0) {
-            mc->mingain = gains[j];
-            mc->maxgain = gains[j];
-        } else {
-            if (gains[j] < mc->mingain) mc->mingain = gains[j];
-            if (gains[j] > mc->maxgain) mc->maxgain = gains[j];
-        }
-    }
-    mc->absdiff /= count;
-    mc->absdiffper = mc->absdiff/fabs(mc->gain)*100;
-    xfree(gains);
-}
-
-/* Fetch 1y of data and performs a Montecarlo simulation where we buy
+/* Fetch up to 5y of data and performs a Montecarlo simulation where we buy
  * and sell at random moments, calculating the average gain (or loss). */
 void botHandleMontecarloRequest(botRequest *br, sds symbol, sds *argv, int argc) {
     sds reply = sdsempty();
     int period = 0;
-    int range = 250; /* Markets are open a bit more than 250 days per year. */
+    int range = 253; /* Markets are open a bit more than 253 days per year. */
     ydata *yd = NULL;
 
     /* Parse arguments. */
@@ -1519,6 +1576,67 @@ cleanup:
     freeYahooData(yd);
     sdsfree(reply);
 }
+
+/* Perform volatility analysis on the specified period (default 253 market
+ * days). */
+void botHandleVolatilityRequest(botRequest *br, sds symbol, sds *argv, int argc) {
+    sds reply = sdsempty();
+    int range = 253; /* Markets are open a bit more than 253 days per year. */
+    ydata *yd = NULL;
+
+    /* Parse arguments. */
+    for (int j = 0; j < argc; j++) {
+        int moreargs = argc-j-1;
+        if (!strcasecmp(argv[j],"range") && moreargs) {
+            range = atoi(argv[++j]);
+            if (range <= 0) range = 1;
+            if (range > 2) {
+                /* Adjust for the amount of open market days in 1 year. */
+                range = (double)range*5/7.2;
+            }
+        } else if (!strcasecmp(argv[j],"help")) {
+            reply = sdsnew(
+                "`$SYMBOL vol [range <days>]`\n"
+                "The default range is one year (253 open market days).");
+            goto cleanup;
+        }
+    }
+
+    /* Fetch the data. Sometimes we'll not obtain enough data points. */
+    yd = getYahooData(YDATA_TS,symbol,"5y","1d");
+    if (yd == NULL || yd->ts_len < range) {
+        reply = sdscatprintf(reply,
+            "Can't fetch historical data for '%s', use the range option to "
+            "limit the amount of history to analyze.",
+                             symbol);
+        goto cleanup;
+    }
+
+    volres vr;
+    computeVolatility(yd,range,&vr);
+    long totdays = vr.pdays + vr.ldays;
+    reply = sdscatprintf(reply,
+        "%s volatility report:\n"
+        "```\n"
+        "Reported profits %-3ld times (%.2f%%)\n"
+        "Reported loss    %-3ld times (%.2f%%)\n"
+        "Average profit   %.2f%%\n"
+        "Average loss     %.2f%%\n"
+        "Max     profit   %.2f%%\n"
+        "Max     loss     %.2f%%"
+        "```\n"
+        "Data from last %d days (adjusted) range.",
+        symbol,
+        (long)vr.pdays, (double)vr.pdays/totdays*100,
+        (long)vr.ldays, (double)vr.ldays/totdays*100,
+        vr.avgp, vr.avgl, vr.maxp, vr.maxl, range);
+
+cleanup:
+    if (reply) botSendMessage(br->target,reply,0);
+    freeYahooData(yd);
+    sdsfree(reply);
+}
+
 
 /* Parse a string in the format <quantity> or <quantity>@<price> for
  * stock selling / buying subcommands. Populate the parameters by
@@ -1932,6 +2050,11 @@ void *botHandleRequest(void *arg) {
     {
         /* $AAPL mc | montecarlo [options] */
         botHandleMontecarloRequest(br,argv[0],argv+1,argc-1);
+    } else if (argc >= 2 && (!strcasecmp(argv[1],"vol") ||
+                             !strcasecmp(argv[1],"volatility")))
+    {
+        /* $AAPL vol | volatility [options] */
+        botHandleVolatilityRequest(br,argv[0],argv+1,argc-1);
     } else if (argc >= 1 && !strcasecmp(argv[0],"help")) {
         /* $HELP */
         botSendMessage(br->target,
@@ -1941,9 +2064,11 @@ void *botHandleRequest(void *arg) {
 "$mylist: +VMW +AAPL -KO  | Modify the list.\n"
 "$mylist:                 | Ask prices of whole list.\n"
 "$mylist: ?               | Show stocks in the list.\n"
-"$mylist: mc              | Montecarlo simulation.\n"
-"$mylist: mc range 60     | Specify Montecarlo range.\n"
-"$mylist: mc period 5     | Specify Sell/Buy fixed period.\n"
+"$AAPL mc                 | Montecarlo simulation.\n"
+"$AAPL mc range 60        | Specify Montecarlo range.\n"
+"$APPL mc period 5        | Specify Sell/Buy fixed period.\n"
+"$AAPL vol                | Volatility analysis.\n"
+"$AAPL vol range 60       | Volatility anal. last 60 market days.\n"
 "$mylist: buy AAPL 10@50  | Add 10 AAPL stocks at 50$ each.\n"
 "$mylist: buy AAPL 20     | Add 20 AAPL stocks at current price.\n"
 "$mylist: buy AAPL        | Add 1 AAPL stocks at current price.\n"
@@ -2094,9 +2219,9 @@ void *scanStocksThread(void *arg) {
         botStats.scanned++;
         j++;
 
-        /* Fetch 5y of data. Abort if we have less than 250 prices. */
+        /* Fetch 5y of data. Abort if we have less than 253 prices. */
         ydata *yd = getYahooData(YDATA_TS,symbol,"5y","1d");
-        if (yd == NULL || yd->ts_len < 250) {
+        if (yd == NULL || yd->ts_len < 253) {
             freeYahooData(yd);
             continue;
         }
@@ -2110,8 +2235,8 @@ void *scanStocksThread(void *arg) {
         /* Compute Montecarlo two times, for the last year, and for
          * the last two months, detecting big changes. */
         mcres mcvl, mclong, mcshort, mcvs, mcday;
-        computeMontecarlo(yd,250*5,1000,5,&mcvl);
-        computeMontecarlo(yd,250,1000,5,&mclong);
+        computeMontecarlo(yd,253*5,1000,5,&mcvl);
+        computeMontecarlo(yd,253,1000,5,&mclong);
         computeMontecarlo(yd,50,1000,5,&mcshort);
         computeMontecarlo(yd,20,1000,5,&mcvs);
         computeMontecarlo(yd,10,1000,1,&mcday);
