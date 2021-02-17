@@ -106,6 +106,133 @@ void xfree(void *ptr) {
 }
 
 /* ============================================================================
+ * Utility funcitons.
+ * ==========================================================================*/
+
+/* Glob-style pattern matching. Return 1 on match, 0 otherwise. */
+int strmatch(const char *pattern, int patternLen,
+             const char *string, int stringLen, int nocase)
+{
+    while(patternLen && stringLen) {
+        switch(pattern[0]) {
+        case '*':
+            while (patternLen && pattern[1] == '*') {
+                pattern++;
+                patternLen--;
+            }
+            if (patternLen == 1)
+                return 1; /* match */
+            while(stringLen) {
+                if (strmatch(pattern+1, patternLen-1,
+                             string, stringLen, nocase))
+                    return 1; /* match */
+                string++;
+                stringLen--;
+            }
+            return 0; /* no match */
+            break;
+        case '?':
+            string++;
+            stringLen--;
+            break;
+        case '[':
+        {
+            int not, match;
+
+            pattern++;
+            patternLen--;
+            not = pattern[0] == '^';
+            if (not) {
+                pattern++;
+                patternLen--;
+            }
+            match = 0;
+            while(1) {
+                if (pattern[0] == '\\' && patternLen >= 2) {
+                    pattern++;
+                    patternLen--;
+                    if (pattern[0] == string[0])
+                        match = 1;
+                } else if (pattern[0] == ']') {
+                    break;
+                } else if (patternLen == 0) {
+                    pattern--;
+                    patternLen++;
+                    break;
+                } else if (patternLen >= 3 && pattern[1] == '-') {
+                    int start = pattern[0];
+                    int end = pattern[2];
+                    int c = string[0];
+                    if (start > end) {
+                        int t = start;
+                        start = end;
+                        end = t;
+                    }
+                    if (nocase) {
+                        start = tolower(start);
+                        end = tolower(end);
+                        c = tolower(c);
+                    }
+                    pattern += 2;
+                    patternLen -= 2;
+                    if (c >= start && c <= end)
+                        match = 1;
+                } else {
+                    if (!nocase) {
+                        if (pattern[0] == string[0])
+                            match = 1;
+                    } else {
+                        if (tolower((int)pattern[0]) == tolower((int)string[0]))
+                            match = 1;
+                    }
+                }
+                pattern++;
+                patternLen--;
+            }
+            if (not)
+                match = !match;
+            if (!match)
+                return 0; /* no match */
+            string++;
+            stringLen--;
+            break;
+        }
+        case '\\':
+            if (patternLen >= 2) {
+                pattern++;
+                patternLen--;
+            }
+            /* fall through */
+        default:
+            if (!nocase) {
+                if (pattern[0] != string[0])
+                    return 0; /* no match */
+            } else {
+                if (tolower((int)pattern[0]) != tolower((int)string[0]))
+                    return 0; /* no match */
+            }
+            string++;
+            stringLen--;
+            break;
+        }
+        pattern++;
+        patternLen--;
+        if (stringLen == 0) {
+            while(*pattern == '*') {
+                pattern++;
+                patternLen--;
+            }
+            break;
+        }
+    }
+    if (patternLen == 0 && stringLen == 0)
+        return 1;
+    return 0;
+}
+
+
+
+/* ============================================================================
  * JSON selector implementation: cJSON is a bit too raw...
  * ==========================================================================*/
 
@@ -1795,9 +1922,10 @@ fmterr:
 }
 
 /* Handle show portfolio requests. */
-void botHandleShowPortfolioRequest(botRequest *br, sds *argv) {
+void botHandleShowPortfolioRequest(botRequest *br, int argc, sds *argv) {
     /* Remove the final "?" from the list name. */
     sds listname = sdsnewlen(argv[0],sdslen(argv[0])-1);
+    sds pattern = argc > 1 ? argv[1] : NULL;
     sds reply = NULL;
     int count;
     stockpack *packs = dbGetPortfolio(listname,&count);
@@ -1823,6 +1951,16 @@ void botHandleShowPortfolioRequest(botRequest *br, sds *argv) {
     double totalpayed = 0;
     for (int j = 0; j < count; j++) {
         stockpack *pack = packs+j;
+
+        /* Filter for pattern if any. */
+        if (pattern) {
+            if (!strmatch(pattern,sdslen(pattern),pack->symbol,
+                          strlen(pack->symbol),1))
+            {
+                continue;
+            }
+        }
+
         double value = pack->value;
         double payed = pack->quantity * pack->avgprice;
         if (tousd && pack->currency == CURRENCY_EUR) {
@@ -1906,9 +2044,10 @@ sds sdsTimeAgo(time_t attime) {
 }
 
 /* Handle show portfolio profit & loss requests. */
-void botHandleShowProfitLossRequest(botRequest *br, sds *argv) {
-    /* Remove the final "?" from the list name. */
-    sds listname = sdsnewlen(argv[0],sdslen(argv[0])-1);
+void botHandleShowProfitLossRequest(botRequest *br, int argc, sds *argv) {
+    /* Remove the final "??" from the list name. */
+    sds listname = sdsnewlen(argv[0],sdslen(argv[0])-2);
+    sds pattern = argc > 1 ? argv[1] : NULL;
     sds reply = NULL;
     int64_t listid = dbGetListID(listname,0);
     if (listid == 0) {
@@ -1929,6 +2068,13 @@ void botHandleShowProfitLossRequest(botRequest *br, sds *argv) {
     reply = sdsnew("```\n");
     while(sqlNextRow(&row)) {
         const char *symbol = row.col[0].s;
+
+        /* Filter for pattern if any. */
+        if (pattern) {
+            if (!strmatch(pattern,sdslen(pattern),symbol,strlen(symbol),1))
+                continue;
+        }
+
         time_t selltime = row.col[2].i;
         int quantity = row.col[3].i;
         double buyprice = row.col[4].d;
@@ -1961,7 +2107,7 @@ void botHandleShowProfitLossRequest(botRequest *br, sds *argv) {
         else
             total += diff * EURUSD;
     }
-    reply = sdscatprintf(reply,"Total portfolio performance: %s%.2f USD\n",
+    reply = sdscatprintf(reply,"Portfolio performance: %s%.2f USD\n",
                          total > 0 ? "+" : "", total);
     reply = sdscat(reply,"```");
 
@@ -2035,14 +2181,12 @@ void *botHandleRequest(void *arg) {
         /* $list: [+... -...] */
         botHandleListRequest(br,argv,argc);
     } else if (argv[0][sdslen(argv[0])-1] == '?') {
-        /* $list? [pl] */
-        if (argc == 1)
-            botHandleShowPortfolioRequest(br,argv);
-        else if (argc == 2 && !strcasecmp(argv[1],"pl"))
-            botHandleShowProfitLossRequest(br,argv);
-        else
-            botSendMessage(br->target,
-                "Use '$listname?' or '$listname? pl'",0);
+        /* $list? [pattern] and $list?? [pattern] */
+        if (argv[0][sdslen(argv[0])-2] != '?') {
+            botHandleShowPortfolioRequest(br,argc,argv);
+        } else {
+            botHandleShowProfitLossRequest(br,argc,argv);
+        }
     } else if (argc == 1 && strcasecmp(argv[0],"help")) {
         /* $AAPL */
         botHandlePriceRequest(br,argv[0]);
@@ -2081,10 +2225,12 @@ void *botHandleRequest(void *arg) {
 "$mylist: sell AAPL 10@35 | Sell 10 AAPL stocks at 35$ each.\n"
 "$mylist: sell AAPL 10    | Sell 10 AAPL stocks at current price.\n"
 "$mylist: sell AAPL       | Sell all AAPL stocks at current price.\n"
-"$mylist?                 | Show portfolio associated with mylist.\n"
-"$mylist? pl              | Show portfolio profit and loss.\n"
+"$mylist? [pattern]       | Show portfolio associated with mylist.\n"
+"$mylist?? [pattern]      | Show portfolio profit and loss history.\n"
 "$$ ls                    | Show all the available lists.\n"
+"$$ info                  | Stop bot internal stats.\n"
 "$$ quit <password>       | Stop the bot process.\n"
+"$help                    | Show this help.\n"
 "```\n",0);
     } else {
         botSendMessage(br->target,

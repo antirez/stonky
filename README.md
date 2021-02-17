@@ -104,12 +104,20 @@ way it will calculate the profit & loss. Example:
     me> $newportfolio: sell AAPL 5@142.11
     bot> You are left with 5 AAPL stocks at an average price of 133.19
 
-    Now with the "pl" subcommand of the portfolio visualization format,
-    you can see the history of your sells:
+    Now with the "??" suffix, you can see the history of your sells:
 
-    me> $newportfolio? pl
+    me> $newportfolio??
     bot> AAPL   : 5 sold at 710.55$ (P/L +44.60 +6.70% 🍀), 20 seconds ago
          Total portfolio performance: +44.60 USD
+
+Both with the $list? and $list?? forms, you can specify a glob-style
+pattern in order to show just a subset of matching stocks, like in:
+
+    $portfolio?? AAPL
+
+    or
+
+    $portfolio?? [ab]*
 
 To get a recap of all the available commands, just send an `$HELP` message
 to the bot.
