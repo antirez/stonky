@@ -41,6 +41,7 @@ a list, then query the list to have all the prices with a single message:
     $mylist: +VMW +AAPL +T -KO  -- Modify the list adding/removing stocks.
     $mylist:                    -- Ask prices of stocks in a given list.
     $mylist: ?                  -- Just show the stocks in the list.
+    $$ ls                       -- Show all the defined lists
 
 ## Portfolio support
 
@@ -85,6 +86,29 @@ Finally you can sell stocks:
 
 As you can see, selling without specifying the quantity will just sell
 all the stocks.
+
+## Profit and losses
+
+Stonky remembers all the sell operations performed for a given portfolio.
+When you sell stocks, you can tell stonky the price at which you sold. This
+way it will calculate the profit & loss. Example:
+
+    me> $newportfolio: buy AAPL 10
+    bot> Now you have 10 AAPL stocks at an average price of 133.19
+    me> $newportfolio: buy TSLA 10
+    bot> Now you have 10 TSLA stocks at an average price of 796.22
+    me> $newportfolio: sell AAPL 5@142.11
+    bot> You are left with 5 AAPL stocks at an average price of 133.19
+
+    Now with the "pl" subcommand of the portfolio visualization format,
+    you can see the history of your sells:
+
+    me> $newportfolio? pl
+    bot> AAPL   : 5 sold at 710.55$ (P/L +44.60 +6.70% 🍀), 20 seconds ago
+         Total portfolio performance: +44.60 USD
+
+To get a recap of all the available commands, just send an `$HELP` message
+to the bot.
 
 ## Background analysis of stocks
 
