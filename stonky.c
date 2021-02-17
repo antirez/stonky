@@ -63,6 +63,7 @@ int autolistsMode = 1; /* Scan to populate auto lists. */
 int debugMode = 0; /* If true enables debugging info (--debug option). */
 int verboseMode = 0; /* If true enables verbose info (--verbose && --debug) */
 char *dbFile = "./stonky.sqlite";    /* Change with --dbfile. */
+char *adminPass = NULL;              /* Admin password. */
 _Thread_local sqlite3 *dbHandle = NULL; /* Per-thread sqlite handle. */
 sds BotApiKey = NULL;
 sds *Symbols; /* Global list of symbols loaded from marketdata/symbols.txt */
@@ -1866,12 +1867,26 @@ void *botHandleRequest(void *arg) {
     sds *argv = sdssplitargs(br->request,&argc);
 
     if (argc >= 2 && !strcasecmp(argv[0],"$")) {
-        /* $$ ls               -- list all the available lists. */
-        if (argc == 2 && !strcasecmp(argv[1],"ls"))
+        if (argc == 2 && !strcasecmp(argv[1],"ls")) {
+            /* $$ ls */
             botHandleLsRequest(br);
-        else
+        } else if (argc == 3 &&
+                   adminPass != NULL &&
+                   !strcasecmp(argv[1],"quit") &&
+                   !strcasecmp(argv[2],adminPass))
+        {
+            /* $$ quit <password> */
+            botSendMessage(br->target, "Exiting in 5 seconds. Bye...",0);
+            sleep(5); /* Wait for the main thread to likely acknowledge
+                         the processing of this message, otherwise the
+                         bot will quit again since it will fetch $$ quit
+                         again at the next restart. */
+            printf("Exiting by user request.\n");
+            exit(0);
+        } else {
             botSendMessage(br->target,
-                "Invalid control command, try $HELP",0);
+                "Invalid control command or bad password, try $HELP",0);
+        }
     } else if (argv[0][sdslen(argv[0])-1] == ':') {
         /* $list: [+... -...] */
         botHandleListRequest(br,argv,argc);
@@ -1918,6 +1933,7 @@ void *botHandleRequest(void *arg) {
 "$mylist?                 | Show portfolio associated with mylist.\n"
 "$mylist? pl              | Show portfolio profit and loss.\n"
 "$$ ls                    | Show all the available lists.\n"
+"$$ quit <password>       | Stop the bot process.\n"
 "```\n",0);
     } else {
         botSendMessage(br->target,
@@ -2235,6 +2251,8 @@ int main(int argc, char **argv) {
             BotApiKey = sdsnew(argv[++j]);
         } else if (!strcmp(argv[j],"--dbfile") && morearg) {
             dbFile = argv[++j];
+        } else if (!strcmp(argv[j],"--adminpass") && morearg) {
+            adminPass = argv[++j];
         } else {
             printf(
             "Usage: %s [--apikey <apikey>] [--debug] [--verbose] "

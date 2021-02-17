@@ -162,3 +162,22 @@ $AAPL
 Apple Inc. (AAPL) price is 136.91$ (+0.11%) |
 pre-market: 136.66$ (-0.18%)
 ```
+
+## Bot administration
+
+If you are developing this bot adding features, like I'm doing right now,
+every time a new feature is added to ssh to the remote server, recompile it
+and execute it again can be boring. You also need to do that if you are
+just a normal user and want to update the bot with the new features from
+time to time. For this reason the bot has a `$$ quit <password>` feature
+that let the administrator of the bot to quit it remotely.
+
+To set the admin password use `--adminpass` option, otherwise the command
+is not recognized at all. Once you do that, you can start the bot, remotely,
+under a screen or tmux session, with:
+
+    while [ 1 ]; do make; ./stonky; sleep 5; done
+
+Every time the bot quits, it recompiles itself and restarts. The
+sleep is important since if there is a problem, you don't want to burn
+all your server CPU in a busy loop.
