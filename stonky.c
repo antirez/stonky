@@ -70,6 +70,7 @@ sds *Symbols; /* Global list of symbols loaded from marketdata/symbols.txt */
 int NumSymbols; /* Number of elements in Symbols. */
 _Atomic double EURUSD = 0; /* EURUSD change, refreshed in background. */
 int ScanPause = 1000000;   /* In microseconds. Default 1 second. */
+int CacheYahoo = 0;        /* Perform Yahoo queries caching. */
 
 /* Global stats. Sometimes we access such stats from threads without caring
  * about race conditions, since they in practice are very unlikely to happen
@@ -80,6 +81,10 @@ struct {
     uint64_t queries;       /* Number of queries received. */
     uint64_t scanned;       /* Number of stocks scanned by the BG thread. */
 } botStats;
+
+int kvSetLen(const char *key, const char *value, size_t vlen, int64_t expire);
+int kvSet(const char *key, const char *value, int64_t expire);
+sds kvGet(const char *key);
 
 /* ============================================================================
  * Allocator wrapper: we want to exit on OOM instead of trying to recover.
@@ -418,6 +423,7 @@ int sqlGenericQuery(sqlRow *row, const char *sql, va_list ap) {
     int rc = SQLITE_ERROR;
     sqlite3_stmt *stmt = NULL;
     sds query = sdsempty();
+    if (row) row->stmt = NULL; /* On error sqlNextRow() should return false. */
 
     /* We need to build the query, substituting the following three
      * classes of patterns with just "?", remembering the order and
@@ -451,7 +457,9 @@ int sqlGenericQuery(sqlRow *row, const char *sql, va_list ap) {
     /* Prepare the query and bind the query arguments. */
     rc = sqlite3_prepare_v2(DbHandle,query,-1,&stmt,NULL);
     if (rc != SQLITE_OK) {
-        if (VerboseMode) printf("Query error: %s: %s\n", query,
+        if (VerboseMode) printf("%p: Query error: %s: %s\n",
+                                (void*)DbHandle,
+                                query,
                                 sqlite3_errmsg(DbHandle));
         goto error;
     }
@@ -480,8 +488,6 @@ int sqlGenericQuery(sqlRow *row, const char *sql, va_list ap) {
             row->col = NULL;
             stmt = NULL; /* Don't free it on cleanup. */
         }
-    } else {
-        if (row) row->stmt = NULL;
     }
 
 error:
@@ -493,8 +499,9 @@ error:
 /* This function should be called only if you don't get all the rows
  * till the end. It is safe to call anyway. */
 void sqlEnd(sqlRow *row) {
+    if (row->stmt == NULL) return;
     xfree(row->col);
-    if (row->stmt) sqlite3_finalize(row->stmt);
+    sqlite3_finalize(row->stmt);
     row->col = NULL;
     row->stmt = NULL;
 }
@@ -792,13 +799,37 @@ ydata *getYahooData(int type, const char *symbol, const char *range, const char 
      * error without any reason, but will work again immediately after. */
     int attempt = 0, maxattempts = 5;
     int res = C_ERR;
-    sds body = NULL;
-    while(attempt < maxattempts && res == C_ERR) {
-        if (attempt > 0) usleep(100000);
-        sdsfree(body);
-        body = makeHttpCall(url,&res);
-        attempt++;
+
+    /* Try using the cache if possible. */
+    sds body = (type == YDATA_TS && CacheYahoo) ? kvGet(url) : NULL;
+    int cached = body != NULL;
+
+    if (body == NULL) {
+        /* No caching or no cached version found? Fetch it from the
+         * Yahoo servers. */
+        while(attempt < maxattempts && res == C_ERR) {
+            if (attempt > 0) usleep(100000);
+            sdsfree(body);
+            body = makeHttpCall(url,&res);
+            attempt++;
+        }
+    } else {
+        if (DebugMode) printf("Using cached version of %s\n", url);
+        res = C_OK;
     }
+
+    /* If we are using caching, and we just fetched a fresh version,
+     * set it on the cache. */
+    if (CacheYahoo && type == YDATA_TS && !cached) {
+        /* Set a TTL from 6 to 8 hours, so that things will not expire
+         * at the same time, and we'll hit Yahoo servers in a more
+         * soft way. Otherwise the background stocks scanner will end
+         * caching all the symbols nearly at the same time, and they will
+         * expire (and get re-fetched) all about at the same time. */
+        int ttl = (3600*6) + (rand() % (3600*2));
+        kvSet(url,body,ttl);
+    }
+
     sdsfree(url);
     if (res != C_OK) {
         sdsfree(body);
@@ -2237,6 +2268,15 @@ void *botHandleRequest(void *arg) {
                          again at the next restart. */
             printf("Exiting by user request.\n");
             exit(0);
+        } else if (argc == 3 &&
+                   AdminPass != NULL &&
+                   !strcasecmp(argv[1],"flush-cache") &&
+                   !strcasecmp(argv[2],AdminPass))
+        {
+            /* $$ flush-cache <password> */
+            botSendMessage(br->target, "Deleting cached entries...",0);
+            sqlQuery("DELETE * FROM KeyValue");
+            botSendMessage(br->target, "Cache flushing done.",0);
         } else if (argc == 4 &&
                    AdminPass != NULL &&
                    !strcasecmp(argv[1],"destroy") &&
@@ -2573,6 +2613,7 @@ void *scanStocksThread(void *arg) {
 
 /* This thread for now only refreshes EUR/USD change every few seconds. */
 void *cvThread(void *arg) {
+    DbHandle = dbInit(0);
     UNUSED(arg);
     while(1) {
         ydata *yd = getYahooData(YDATA_QUOTE,"EURUSD=X",NULL,NULL);
@@ -2662,6 +2703,8 @@ int main(int argc, char **argv) {
             AutoListsMode = 0;
         } else if (!strcmp(argv[j],"--verbose")) {
             VerboseMode = 1;
+        } else if (!strcmp(argv[j],"--cache")) {
+            CacheYahoo = 1;
         } else if (!strcmp(argv[j],"--apikey") && morearg) {
             BotApiKey = sdsnew(argv[++j]);
         } else if (!strcmp(argv[j],"--dbfile") && morearg) {
@@ -2674,7 +2717,8 @@ int main(int argc, char **argv) {
         } else {
             printf(
             "Usage: %s [--apikey <apikey>] [--debug] [--verbose] "
-            "[--noautolists] [--dbfile <filename>] [--scanpause <usec>]"
+            "[--noautolists] [--dbfile <filename>] [--scanpause <usec>] "
+            "[--cache]"
             "\n",argv[0]);
             exit(1);
         }
