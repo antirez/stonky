@@ -2408,17 +2408,18 @@ void *scanStocksThread(void *arg) {
         /* Compute Montecarlo two times, for the last year, and for
          * the last two months, detecting big changes. */
         mcres mcvl, mclong, mcshort, mcvs, mcday;
-        volres vol;
+        volres vol10;
         computeMontecarlo(yd,253*5,1000,5,&mcvl);
         computeMontecarlo(yd,253,1000,5,&mclong);
         computeMontecarlo(yd,50,1000,5,&mcshort);
         computeMontecarlo(yd,20,1000,5,&mcvs);
         computeMontecarlo(yd,10,1000,1,&mcday);
-        computeVolatility(yd,10,&vol);
+        computeVolatility(yd,10,&vol10);
 
         /* Cache the stock data we want to use later, then free the
          * API data. */
-        double price = yd->reg;
+        double price = 0;
+        if (yd->ts_len) price = yd->ts_data[yd->ts_len-1];
         freeYahooData(yd);
 
         int showstats = debugMode ? 1 : 0;
@@ -2426,45 +2427,57 @@ void *scanStocksThread(void *arg) {
             printf(
             "Scanning %s: VL%.2f(+-%.2f%%) -> L%.2f(+-%.2f%%) ->\n"
             "         S%.2f(+-%.2f%%) -> VS%.2f(+-%.2f%%) -> D%.2f(+-%.2f%%)\n"
-            "         LD %d PD %d\n"
+            "         LD %d PD %d LASTPRICE: %.2f\n"
                 ,symbol,
                 mcvl.gain, mcvl.absdiffper,
                 mclong.gain, mclong.absdiffper,
                 mcshort.gain, mcshort.absdiffper,
                 mcvs.gain, mcvs.absdiffper,
                 mcday.gain, mcday.absdiffper,
-                (int)vol.ldays, (int)vol.pdays);
+                (int)vol10.ldays, (int)vol10.pdays, price);
 
         if (mclong.gain < mcshort.gain &&
-            mcshort.gain <  mcvs.gain &&
-            mcvs.gain > 8 &&
-            mclong.gain < 5 &&
-            mcday.gain > 1 &&
-            mcday.absdiffper < 100)
+            /* Tothemoon: stocks that performed poorly in the past, but
+             * now are monotonically performing better as we look progressively
+             * at nearest periods. They must have a small variability of
+             * positive performances in the latest days to get accepted.
+             *
+             * The idea is to find new trends and stocks that are resurrecting
+             * for some reason. Many will be penny stocks. */
+            mcshort.gain <  mcvs.gain && /* Are getting better. */
+            mcvs.gain > 8 &&             /* Very high gains recently. */
+            mclong.gain < 5 &&           /* Not too strong historically. */
+            mcday.gain > 1 &&            /* High gains in few last days. */
+            mcday.absdiffper < 100)      /* Consistency in few last days. */
         {
             printf("tothemoon: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("tothemoon", symbol);
             showstats=1;
         } else if (
-            mcvl.gain < mclong.gain &&
-            mclong.gain < mcshort.gain &&
-            mcshort.gain < mcvs.gain &&
-            mcvl.gain > 0.5 &&
-            mclong.gain > 0.5 &&
-            mcshort.gain > 3 &&
-            mcvs.gain > 4 &&
-            mcday.gain > 1 &&
-            price > 40)
+            /* Stocks with a long history of good results that are doing
+             * even better now. */
+            mcvl.gain < mclong.gain &&      /* Getting better in the long. */
+            mclong.gain < mcshort.gain &&   /* Getting better in the short .*/
+            mcshort.gain < mcvs.gain &&     /* Getting even better now. */
+            mcvl.gain > 0.5 &&              /* Positive in the very long. */
+            mclong.gain > 2 &&              /* Quite good in the long. */
+            mcshort.gain > 3 &&             /* Good in the short. */
+            mcvs.gain > 4 &&                /* Outstanding in the short. */
+            mcday.gain > 1 &&               /* Doing well right now. */
+            price > 20)                     /* Not penny stock. */
         {
             printf("evenbetter: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("evenbetter", symbol);
             showstats=1;
         } else if (
+            /* New experiment about stocks that had positive results
+             * every single day of the last 10 days of trading. Needs
+             * tuning. */
             mclong.gain > 0.5 &&
             mcshort.gain > 3 &&
             mcvs.gain > 3 &&
-            vol.ldays == 0 &&
-            price > 40)
+            vol10.ldays == 0 && vol10.pdays > 0 &&
+            price > 10)
         {
             printf("unstoppable: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("unstoppable", symbol);
