@@ -2566,7 +2566,7 @@ void *scanStocksThread(void *arg) {
             mcshort.gain > 3 &&             /* Good in the short. */
             mcvs.gain > 4 &&                /* Outstanding in the short. */
             mcday.gain > 1 &&               /* Doing well right now. */
-            price > 20)                     /* Not penny stock. */
+            price > 80)                     /* Not penny stock. */
         {
             printf("evenbetter: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("evenbetter", symbol);
