@@ -59,13 +59,13 @@
 #define STONKY_NOFLAGS 0        /* No special flags. */
 #define STONKY_SHORT (1<<0)     /* Use short form for some output. */
 
-int autolistsMode = 1; /* Scan to populate auto lists. */
-int debugMode = 0; /* If true enables debugging info (--debug option). */
-int verboseMode = 0; /* If true enables verbose info (--verbose && --debug) */
-char *dbFile = "./stonky.sqlite";    /* Change with --dbfile. */
-char *adminPass = NULL;              /* Admin password. */
-_Thread_local sqlite3 *dbHandle = NULL; /* Per-thread sqlite handle. */
-sds BotApiKey = NULL;
+int AutoListsMode = 1; /* Scan to populate auto lists. */
+int DebugMode = 0; /* If true enables debugging info (--debug option). */
+int VerboseMode = 0; /* If true enables verbose info (--verbose && --debug) */
+char *DbFile = "./stonky.sqlite";    /* Change with --dbfile. */
+char *AdminPass = NULL;              /* Admin password. */
+_Thread_local sqlite3 *DbHandle = NULL; /* Per-thread sqlite handle. */
+sds BotApiKey = NULL;                   /* Telegram API key for the bot. */
 sds *Symbols; /* Global list of symbols loaded from marketdata/symbols.txt */
 int NumSymbols; /* Number of elements in Symbols. */
 _Atomic double EURUSD = 0; /* EURUSD change, refreshed in background. */
@@ -391,7 +391,7 @@ typedef struct sqlRow {
 } sqlRow;
 
 /* This is the low level function that we use to model all the higher level
- * functions. It is based on the idea that dbHandle is a per-thread SQLite
+ * functions. It is based on the idea that DbHandle is a per-thread SQLite
  * handle already available: the rest of the code will ensure this.
  *
  * Queries can contain ?s ?b ?i and ?d special specifiers that are bound to
@@ -449,10 +449,10 @@ int sqlGenericQuery(sqlRow *row, const char *sql, va_list ap) {
     }
 
     /* Prepare the query and bind the query arguments. */
-    rc = sqlite3_prepare_v2(dbHandle,query,-1,&stmt,NULL);
+    rc = sqlite3_prepare_v2(DbHandle,query,-1,&stmt,NULL);
     if (rc != SQLITE_OK) {
-        if (verboseMode) printf("Query error: %s: %s\n", query,
-                                sqlite3_errmsg(dbHandle));
+        if (VerboseMode) printf("Query error: %s: %s\n", query,
+                                sqlite3_errmsg(DbHandle));
         goto error;
     }
 
@@ -546,7 +546,7 @@ int sqlInsert(const char *sql, ...) {
     va_list ap;
     va_start(ap,sql);
     int rc = sqlGenericQuery(NULL,sql,ap);
-    if (rc == SQLITE_DONE) lastid = sqlite3_last_insert_rowid(dbHandle);
+    if (rc == SQLITE_DONE) lastid = sqlite3_last_insert_rowid(DbHandle);
     va_end(ap);
     return lastid;
 }
@@ -624,7 +624,7 @@ size_t makeHttpCallWriter(char *ptr, size_t size, size_t nmemb, void *userdata)
  * The returned SDS string must be freed by the caller both in case of
  * error and success. */
 sds makeHttpCall(const char *url, int *resptr) {
-    if (debugMode) printf("HTTP GET %s\n", url);
+    if (DebugMode) printf("HTTP GET %s\n", url);
     CURL* curl;
     CURLcode res;
     sds body = sdsempty();
@@ -946,16 +946,16 @@ botRequest *createBotRequest(void) {
     return br;
 }
 
-/* =============================================================================
+/* ==========================================================================
  * Key value store abstraction. This implements a trivial KV store on top
- * of SQLite. It only has SET, GET and support for a maximum time to live.
- * ===========================================================================*/
+ * of SQLite. It only has SET, GET, DEL and support for a maximum time to live.
+ * ======================================================================== */
 
 /* Set the key to the specified value and expire time. */
 int kvSetLen(const char *key, const char *value, size_t vlen, int64_t expire) {
     expire += time(NULL);
     if (!sqlInsert("INSERT INTO KeyValue VALUES(?i,?s,?b)",
-                   key,value,vlen,expire))
+                   expire,key,value,vlen))
     {
         if (!sqlQuery("UPDATE KeyValue SET expire=?i,value=?b WHERE key=?s",
                       expire,value,vlen,key))
@@ -979,14 +979,19 @@ sds kvGet(const char *key) {
     sqlSelect(&row,"SELECT expire,value FROM KeyValue WHERE key=?s",key);
     if (sqlNextRow(&row)) {
         int64_t expire = row.col[0].i;
-        if (expire < time(NULL)) {
+        if (expire && expire < time(NULL)) {
             sqlQuery("DELETE FROM KeyValue WHERE key=?s",key);
         } else {
             value = sdsnewlen(row.col[1].s,row.col[1].i);
         }
-        sqlEnd(&row);
     }
+    sqlEnd(&row);
     return value;
+}
+
+/* Delete the key if it exists. */
+void kvDel(const char *key) {
+    sqlQuery("DELETE FROM KeyValue WHERE key=?s",key);
 }
 
 /* =============================================================================
@@ -997,7 +1002,7 @@ sds kvGet(const char *key) {
  * the SQLite database handle. Return NULL on error. */
 sqlite3 *dbInit(int createdb) {
     sqlite3 *db;
-    int rt = sqlite3_open(dbFile, &db);
+    int rt = sqlite3_open(DbFile, &db);
     if (rt != SQLITE_OK) {
         fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
         sqlite3_close(db);
@@ -1048,8 +1053,8 @@ sqlite3 *dbInit(int createdb) {
 /* Should be called every time a thread exits, so that if the thread has
  * an SQLite thread-local handle, it gets closed. */
 void dbClose(void) {
-    if (dbHandle) sqlite3_close(dbHandle);
-    dbHandle = NULL;
+    if (DbHandle) sqlite3_close(DbHandle);
+    DbHandle = NULL;
 }
 
 /* Return the ID of the specified list.
@@ -1479,7 +1484,7 @@ void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
 
         double gain = (sell_price-buy_price)/buy_price*100;
         gains[j] = gain;
-        if (debugMode) {
+        if (DebugMode) {
             printf("Montecarlo buy (%d) %f sell (%d) %f: %f\n",
                 buyday, buy_price, sellday, sell_price, gain);
         }
@@ -1611,7 +1616,7 @@ sds sdsCatPriceRequest(sds s, sds symbol, ydata *yd, int flags) {
             (yd->regchange && yd->regchange[0] == '-') ? "" : "+",
             yd->regchange);
     }
-    if (debugMode) {
+    if (DebugMode) {
         printf("%s pretime:%d regtime:%d posttime:%d\n",
             yd->symbol,
             (int)yd->pretime, (int)yd->regtime, (int)yd->posttime);
@@ -2208,7 +2213,7 @@ void botHandleLsRequest(botRequest *br) {
 
 /* Request handling thread entry point. */
 void *botHandleRequest(void *arg) {
-    dbHandle = dbInit(0);
+    DbHandle = dbInit(0);
     botRequest *br = arg;
 
     /* Parse the request as a command composed of arguments. */
@@ -2220,9 +2225,9 @@ void *botHandleRequest(void *arg) {
             /* $$ ls */
             botHandleLsRequest(br);
         } else if (argc == 3 &&
-                   adminPass != NULL &&
+                   AdminPass != NULL &&
                    !strcasecmp(argv[1],"quit") &&
-                   !strcasecmp(argv[2],adminPass))
+                   !strcasecmp(argv[2],AdminPass))
         {
             /* $$ quit <password> */
             botSendMessage(br->target, "Exiting in 5 seconds. Bye...",0);
@@ -2233,9 +2238,9 @@ void *botHandleRequest(void *arg) {
             printf("Exiting by user request.\n");
             exit(0);
         } else if (argc == 4 &&
-                   adminPass != NULL &&
+                   AdminPass != NULL &&
                    !strcasecmp(argv[1],"destroy") &&
-                   !strcasecmp(argv[3],adminPass))
+                   !strcasecmp(argv[3],AdminPass))
         {
             /* $$ destroy <listname> <password> */
             botSendMessage(br->target, "Destroying list...",0);
@@ -2359,7 +2364,7 @@ int64_t botProcessUpdates(int64_t offset, int timeout) {
         time_t timestamp = date->valuedouble;
         cJSON *text = cJSON_Select(update,".message.text:s");
         if (text == NULL) continue;
-        if (verboseMode) printf(".message.text: %s\n", text->valuestring);
+        if (VerboseMode) printf(".message.text: %s\n", text->valuestring);
 
         /* Sanity check the request before starting the thread:
          * validate that is a request that is really targeting our bot. */
@@ -2378,7 +2383,7 @@ int64_t botProcessUpdates(int64_t offset, int timeout) {
             freeBotRequest(bt);
             continue;
         }
-        if (verboseMode)
+        if (VerboseMode)
             printf("Starting thread to serve: \"%s\"\n",bt->request);
     }
 
@@ -2424,7 +2429,7 @@ int loadSymbols(void) {
         Symbols[with] = aux;
     }
 
-    if (verboseMode) printf("%d Symbols loaded\n", NumSymbols);
+    if (VerboseMode) printf("%d Symbols loaded\n", NumSymbols);
     return C_OK;
 }
 
@@ -2432,7 +2437,7 @@ int loadSymbols(void) {
  * special features, and putting them into lists. */
 void *scanStocksThread(void *arg) {
     UNUSED(arg);
-    dbHandle = dbInit(0);
+    DbHandle = dbInit(0);
     int j = 0;
 
 #if 0 /* Debugging. */
@@ -2479,8 +2484,8 @@ void *scanStocksThread(void *arg) {
         if (yd->ts_len) price = yd->ts_data[yd->ts_len-1];
         freeYahooData(yd);
 
-        int showstats = debugMode ? 1 : 0;
-        if (verboseMode)
+        int showstats = DebugMode ? 1 : 0;
+        if (VerboseMode)
             printf(
             "Scanning %s: VL%.2f(+-%.2f%%) -> L%.2f(+-%.2f%%) ->\n"
             "         S%.2f(+-%.2f%%) -> VS%.2f(+-%.2f%%) -> D%.2f(+-%.2f%%)\n"
@@ -2582,7 +2587,7 @@ void startBackgroundTasks(void) {
     pthread_t tid;
 
     /* Autolists thread. */
-    if (Symbols && autolistsMode) {
+    if (Symbols && AutoListsMode) {
         if (pthread_create(&tid,NULL,scanStocksThread,NULL) != 0) {
             printf("Can't create the thread to scan stocks "
                    "on the background\n");
@@ -2651,18 +2656,18 @@ int main(int argc, char **argv) {
     for (int j = 1; j < argc; j++) {
         int morearg = argc-j-1;
         if (!strcmp(argv[j],"--debug")) {
-            debugMode = 1;
-            verboseMode = 1;
+            DebugMode = 1;
+            VerboseMode = 1;
         } else if (!strcmp(argv[j],"--noautolists")) {
-            autolistsMode = 0;
+            AutoListsMode = 0;
         } else if (!strcmp(argv[j],"--verbose")) {
-            verboseMode = 1;
+            VerboseMode = 1;
         } else if (!strcmp(argv[j],"--apikey") && morearg) {
             BotApiKey = sdsnew(argv[++j]);
         } else if (!strcmp(argv[j],"--dbfile") && morearg) {
-            dbFile = argv[++j];
+            DbFile = argv[++j];
         } else if (!strcmp(argv[j],"--adminpass") && morearg) {
-            adminPass = argv[++j];
+            AdminPass = argv[++j];
         } else if (!strcmp(argv[j],"--scanpause") && morearg) {
             ScanPause = atoi(argv[++j]);
             if (ScanPause < 0) ScanPause = 0;
@@ -2685,8 +2690,8 @@ int main(int argc, char **argv) {
         exit(1);
     }
     resetBotStats();
-    dbHandle = dbInit(1);
-    if (dbHandle == NULL) exit(1);
+    DbHandle = dbInit(1);
+    if (DbHandle == NULL) exit(1);
     cJSON_Hooks jh = {.malloc_fn = xmalloc, .free_fn = xfree};
     cJSON_InitHooks(&jh);
     loadSymbols();
