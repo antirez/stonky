@@ -141,7 +141,9 @@ private message.
 The bot handles the following lists:
 
 * The `tothemoon` list contains stocks that performed poorly in the past, but now for some reason are showing to have a massive momentum.
+* The `penny` list, like `tothemoon` but for stocks worth less than 15$.
 * The `evenbetter` list contains stocks that are very strong performers in the past, and now are performing even better.
+* The `unstoppable` list contains stocks that have generally good parameters and gained value in every of the last 10 days of trading.
 
 ## Output examples
 

@@ -2552,8 +2552,9 @@ void *scanStocksThread(void *arg) {
             mcday.gain > 1 &&            /* High gains in few last days. */
             mcday.absdiffper < 100)      /* Consistency in few last days. */
         {
-            printf("tothemoon: %d/%d %s\n",j,NumSymbols,symbol);
-            dbAddStockToList("tothemoon", symbol);
+            char *listname = price < 15 ? "penny" : "tothemoon";
+            printf("%s: %d/%d %s\n",listname,j,NumSymbols,symbol);
+            dbAddStockToList(listname, symbol);
             showstats=1;
         } else if (
             /* Stocks with a long history of good results that are doing
@@ -2585,6 +2586,7 @@ void *scanStocksThread(void *arg) {
             dbAddStockToList("unstoppable", symbol);
             showstats=1;
         } else {
+            dbDelStockFromList("penny", symbol, 0);
             dbDelStockFromList("tothemoon", symbol, 0);
             dbDelStockFromList("evenbetter", symbol, 0);
             dbDelStockFromList("unstoppable", symbol, 0);
