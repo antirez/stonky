@@ -394,9 +394,14 @@ typedef struct sqlRow {
  * functions. It is based on the idea that dbHandle is a per-thread SQLite
  * handle already available: the rest of the code will ensure this.
  *
- * Queries can contain ?s ?i and ?d special specifiers that are bound to
+ * Queries can contain ?s ?b ?i and ?d special specifiers that are bound to
  * the SQL query, and must be present later as additional arguments after
  * the 'sql' argument.
+ *
+ *  ?s      -- TEXT field: char* argument.
+ *  ?b      -- Blob field: char* argument followed by size_t argument.
+ *  ?i      -- INT field : int64_t argument.
+ *  ?d      -- REAL field: double argument.
  *
  * The function returns the return code of the last SQLite query that
  * failed on error. On success it returns what sqlite3_step() returns.
@@ -420,6 +425,7 @@ int sqlGenericQuery(sqlRow *row, const char *sql, va_list ap) {
      * the query:
      *
      * ?s string
+     * ?b blob (varargs must have char ptr and size_t len)
      * ?i int64_t
      * ?d double
      */
@@ -428,7 +434,7 @@ int sqlGenericQuery(sqlRow *row, const char *sql, va_list ap) {
     const char *p = sql;
     while(p[0]) {
         if (p[0] == '?') {
-            if (p[1] == 's' || p[1] == 'i' || p[1] == 'd') {
+            if (p[1] == 's' || p[1] == 'i' || p[1] == 'd' || p[1] == 'b') {
                 if (numspec == SQL_MAX_SPEC) goto error;
                 spec[numspec++] = p[1];
             } else {
@@ -452,6 +458,9 @@ int sqlGenericQuery(sqlRow *row, const char *sql, va_list ap) {
 
     for (int j = 0; j < numspec; j++) {
         switch(spec[j]) {
+        case 'b': rc = sqlite3_bind_blob64(stmt,j+1,va_arg(ap,char*),
+                                                    va_arg(ap,size_t),NULL);
+                  break;
         case 's': rc = sqlite3_bind_text(stmt,j+1,va_arg(ap,char*),-1,NULL);
                   break;
         case 'i': rc = sqlite3_bind_int64(stmt,j+1,va_arg(ap,int64_t));
@@ -938,6 +947,49 @@ botRequest *createBotRequest(void) {
 }
 
 /* =============================================================================
+ * Key value store abstraction. This implements a trivial KV store on top
+ * of SQLite. It only has SET, GET and support for a maximum time to live.
+ * ===========================================================================*/
+
+/* Set the key to the specified value and expire time. */
+int kvSetLen(const char *key, const char *value, size_t vlen, int64_t expire) {
+    expire += time(NULL);
+    if (!sqlInsert("INSERT INTO KeyValue VALUES(?i,?s,?b)",
+                   key,value,vlen,expire))
+    {
+        if (!sqlQuery("UPDATE KeyValue SET expire=?i,value=?b WHERE key=?s",
+                      expire,value,vlen,key))
+        {
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
+/* Wrapper where the value len is obtained via strlen().*/
+int kvSet(const char *key, const char *value, int64_t expire) {
+    return kvSetLen(key,value,strlen(value),expire);
+}
+
+/* Get the specified key and return it as an SDS string. If the value is
+ * expired or does not exist NULL is returned. */
+sds kvGet(const char *key) {
+    sds value = NULL;
+    sqlRow row;
+    sqlSelect(&row,"SELECT expire,value FROM KeyValue WHERE key=?s",key);
+    if (sqlNextRow(&row)) {
+        int64_t expire = row.col[0].i;
+        if (expire < time(NULL)) {
+            sqlQuery("DELETE FROM KeyValue WHERE key=?s",key);
+        } else {
+            value = sdsnewlen(row.col[1].s,row.col[1].i);
+        }
+        sqlEnd(&row);
+    }
+    return value;
+}
+
+/* =============================================================================
  * Database abstraction
  * ===========================================================================*/
 
@@ -974,6 +1026,11 @@ sqlite3 *dbInit(int createdb) {
                                           "sellprice REAL,"
                                           "csym TEXT);" /* Currency symbol. */
     "CREATE INDEX IF NOT EXISTS idx_profitloss_lsid ON ProfitLoss(listid);"
+    "CREATE TABLE IF NOT EXISTS KeyValue(expire INT, "
+                                        "key TEXT, "
+                                        "value BLOB);"
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_kv_key ON KeyValue(key);"
+    "CREATE INDEX IF NOT EXISTS idx_ex_key ON KeyValue(expire);"
     ;
 
         char *errmsg;
