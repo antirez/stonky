@@ -1897,10 +1897,10 @@ void botHandleTrendRequest(botRequest *br, sds symbol) {
             "  1m: %-8.2f (+-%.2f%%)\n"
             "```"
             ,symbol,
-            mcvl.gain, mcvl.absdiffper,
-            mclong.gain, mclong.absdiffper,
-            mcshort.gain, mcshort.absdiffper,
-            mcvs.gain, mcvs.absdiffper);
+            mcvl.gain, mcvl.absdiff,
+            mclong.gain, mclong.absdiff,
+            mcshort.gain, mcshort.absdiff,
+            mcvs.gain, mcvs.absdiff);
 
 cleanup:
     if (reply) botSendMessage(br->target,reply,0);
