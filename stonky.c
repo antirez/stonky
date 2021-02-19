@@ -236,8 +236,6 @@ int strmatch(const char *pattern, int patternLen,
     return 0;
 }
 
-
-
 /* ============================================================================
  * JSON selector implementation: cJSON is a bit too raw...
  * ==========================================================================*/
@@ -1875,6 +1873,40 @@ cleanup:
     sdsfree(reply);
 }
 
+/* $STOCK trend request handling. */
+void botHandleTrendRequest(botRequest *br, sds symbol) {
+    sds reply = NULL;
+    ydata *yd = getYahooData(YDATA_TS,symbol,"5y","1d");
+    if (yd == NULL || yd->ts_len < 253) {
+        reply = sdscatprintf(reply,
+            "Can't fetch enough historical data for '%s'.",symbol);
+        goto cleanup;
+    }
+    mcres mcvl, mclong, mcshort, mcvs;
+    computeMontecarlo(yd,253*5,1000,5,&mcvl);
+    computeMontecarlo(yd,253,1000,5,&mclong);
+    computeMontecarlo(yd,60,1000,5,&mcshort);
+    computeMontecarlo(yd,20,1000,5,&mcvs);
+
+    reply = sdscatprintf(sdsempty(),
+            "```\n"
+            "%s Montecarlo analysis trend, 5 days buy/sell period.\n"
+            "  5y: %-8.2f (+-%.2f%%)\n"
+            "  1y: %-8.2f (+-%.2f%%)\n"
+            "  3m: %-8.2f (+-%.2f%%)\n"
+            "  1m: %-8.2f (+-%.2f%%)\n"
+            "```"
+            ,symbol,
+            mcvl.gain, mcvl.absdiffper,
+            mclong.gain, mclong.absdiffper,
+            mcshort.gain, mcshort.absdiffper,
+            mcvs.gain, mcvs.absdiffper);
+
+cleanup:
+    if (reply) botSendMessage(br->target,reply,0);
+    freeYahooData(yd);
+    sdsfree(reply);
+}
 
 /* Parse a string in the format <quantity> or <quantity>@<price> for
  * stock selling / buying subcommands. Populate the parameters by
@@ -2327,6 +2359,9 @@ void *botHandleRequest(void *arg) {
     {
         /* $AAPL vol | volatility [options] */
         botHandleVolatilityRequest(br,argv[0],argv+2,argc-2);
+    } else if (argc == 2 && !strcasecmp(argv[1],"trend")) {
+        /* $AAPL trend. */
+        botHandleTrendRequest(br,argv[0]);
     } else if (argc >= 1 && !strcasecmp(argv[0],"help")) {
         /* $HELP */
         botSendMessage(br->target,
@@ -2339,6 +2374,7 @@ void *botHandleRequest(void *arg) {
 "$AAPL mc                 | Montecarlo simulation.\n"
 "$AAPL mc range 60        | Specify Montecarlo range.\n"
 "$APPL mc period 5        | Specify Sell/Buy fixed period.\n"
+"$APPL trend              | Montecarlo trend analysis.\n"
 "$AAPL vol                | Volatility analysis.\n"
 "$AAPL vol range 60       | Volatility anal. last 60 market days.\n"
 "$mylist: buy AAPL 10@50  | Add 10 AAPL stocks at 50$ each.\n"
