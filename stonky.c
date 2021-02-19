@@ -2321,7 +2321,7 @@ void *botHandleRequest(void *arg) {
             /* $$ info */
             char buf[1024];
             sds ago = sdsTimeAgo(botStats.start_time);
-            snprintf(buf,sizeof(buf),"Hey, I was started %s ago, served %llu queries and scanned, in the background, %llu stocks seraching for good ones.",
+            snprintf(buf,sizeof(buf),"Hey, I was started %s ago, served %llu queries and scanned, in the background, %llu stocks searching for good ones.",
                 ago,
                 (unsigned long long)botStats.queries,
                 (unsigned long long)botStats.scanned);
