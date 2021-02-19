@@ -2115,19 +2115,28 @@ void botHandleShowPortfolioRequest(botRequest *br, int argc, sds *argv) {
             gp -= 10;
         } while(gp >= 10);
 
-        reply = sdscatprintf(reply,"%-7s | %-3d | %s%.2f (%s%.2f%%) %s\n",
+        reply = sdscatprintf(reply,
+            "%-7s %d@%.2f = %.0f\n"
+            "       %s%.2f (%s%.2f%%) %s\n"
+            "       %s%.2f (%s%.2f%%) today\n\n",
             pack->symbol,
             (int)pack->quantity,
+            pack->avgprice,
+            pack->avgprice * pack->quantity,
             (pack->gain >= 0) ? "+" : "",
             pack->gain,
             (pack->gainperc >= 0) ? "+" : "",
             pack->gainperc,
-            emoji);
+            emoji,
+            (pack->daygain >= 0) ? "+" : "",
+            pack->daygain,
+            (pack->daygainperc >= 0) ? "+" : "",
+            pack->daygainperc);
         sdsfree(emoji);
     }
     double totalgain = totalvalue-totalpayed;
     double totalgainperc = (totalvalue/totalpayed-1)*100;
-    reply = sdscatprintf(reply,"Total value: %.2f%s\n",
+    reply = sdscatprintf(reply,"---------\nTotal value: %.2f%s\n",
                         totalvalue,
                         tousd ? "$" : "€");
     reply = sdscatprintf(reply,"Total P/L  : %s%.2f%s (%s%.2f%%)",
