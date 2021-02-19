@@ -1878,7 +1878,7 @@ void botHandleTrendRequest(botRequest *br, sds symbol) {
     sds reply = NULL;
     ydata *yd = getYahooData(YDATA_TS,symbol,"5y","1d");
     if (yd == NULL || yd->ts_len < 253) {
-        reply = sdscatprintf(reply,
+        reply = sdscatprintf(sdsempty(),
             "Can't fetch enough historical data for '%s'.",symbol);
         goto cleanup;
     }
