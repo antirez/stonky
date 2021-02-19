@@ -1891,10 +1891,10 @@ void botHandleTrendRequest(botRequest *br, sds symbol) {
     reply = sdscatprintf(sdsempty(),
             "```\n"
             "%s Montecarlo analysis trend, 5 days buy/sell period.\n"
-            "  5y: %-8.2f (+-%.2f%%)\n"
-            "  1y: %-8.2f (+-%.2f%%)\n"
-            "  3m: %-8.2f (+-%.2f%%)\n"
-            "  1m: %-8.2f (+-%.2f%%)\n"
+            "  5y: %-8.2f%% (+-%.2f%%)\n"
+            "  1y: %-8.2f%% (+-%.2f%%)\n"
+            "  3m: %-8.2f%% (+-%.2f%%)\n"
+            "  1m: %-8.2f%% (+-%.2f%%)\n"
             "```"
             ,symbol,
             mcvl.gain, mcvl.absdiff,
