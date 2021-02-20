@@ -37,6 +37,16 @@ analysis.
 
     $AAPL mc period 10 range 200
 
+    $AAPL vol       -- Perform a volatility analysis on the stock. The
+                       command analyzes the number of days the stock gained
+                       and lost separately, reporting the maximum and
+                       average profit and loss in a single day.
+
+    $AAPL trend     -- Perform a Montecarlo analysis in different ranges
+                       and all with fixed give days period between selling
+                       and buying, to show how the stock is doing over
+                       time.
+
 ## Lists support
 
 The bot supports the concept of "list of stocks", you can add stocks to
@@ -173,6 +183,19 @@ Apple Inc. (AAPL) price is 136.91$ (+0.11%) |
 pre-market: 136.66$ (-0.18%)
 ```
 
+$AAPL vol
+
+```
+AAPL volatility report:
+Reported profits 134 times (53.17%)
+Reported loss    118 times (46.83%)
+Average profit   2.18%
+Average loss     -1.97%
+Max     profit   11.98%
+Max     loss     -12.86%
+Data from last 253 days (adjusted) range.
+```
+
 ## Bot administration
 
 If you are developing this bot adding features, like I'm doing right now,
@@ -191,3 +214,18 @@ under a screen or tmux session, with:
 Every time the bot quits, it recompiles itself and restarts. The
 sleep is important since if there is a problem, you don't want to burn
 all your server CPU in a busy loop.
+
+## Caching Yahoo API queries on SQLite
+
+Using the --cache command line option, it is possible to tell the bot to
+store Yahoo queries about historical data (so not Yahoo queries about
+the current price of the stock, which must be always updated) in the
+SQLite database. This allows the "auto lists" feature of the bot to run
+much faster, and is useful for development purposes. This way you can change
+the parameters of the `tothemoon` and other autolists, and check what is
+the result on the selected stocks. Note that this feature will take
+more or les 650 MB of disk space, used by your SQLite database.
+
+The cache can be flushed using:
+
+    $$ flush-cache
