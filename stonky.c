@@ -1687,7 +1687,7 @@ void botHandlePriceRequest(botRequest *br, sds symbol) {
     sdsfree(reply);
 }
 
-/* Handle bot chart requests in the form: $AAPL 1d|5d|1m|6m|1y. */
+/* Handle bot chart requests in the form: $AAPL 1d|5d|1m|6m|1y|5y. */
 void botHandleChartRequest(botRequest *br, sds symbol, sds range) {
     ydata *yd = NULL;
     sds reply = sdsempty();
@@ -1711,8 +1711,11 @@ void botHandleChartRequest(botRequest *br, sds symbol, sds range) {
     } else if (!strcasecmp(range,"1y")) {
         api_range = "1y";
         api_interval = "5d";
+    } else if (!strcasecmp(range,"5y")) {
+        api_range = "5y";
+        api_interval = "1mo";
     } else {
-        reply = sdscatprintf(reply,"Invalid chart range. Use 1d|5d|1m|6m|1y");
+        reply = sdscatprintf(reply,"Invalid chart range. Use 1d|5d|1m|6m|1y|5y");
         goto fmterr;
     }
 
@@ -2403,7 +2406,7 @@ void *botHandleRequest(void *arg) {
         botSendMessage(br->target,
 "```\n"
 "$AAPL                    | Show price for AAPL.\n"
-"$AAPL 1d|5d|1m|6m|1y     | Show AAPL price chart for period\n"
+"$AAPL 1d|5d|1m|6m|1y|5y  | Show AAPL price chart for period\n"
 "$mylist: +VMW +AAPL -KO  | Modify the list.\n"
 "$mylist:                 | Ask prices of whole list.\n"
 "$mylist::                | Like $mylist: but more verbose.\n"

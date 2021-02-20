@@ -25,7 +25,7 @@ All the Stonky commands start with the "$" character.
 
     $AAPL           -- Reply with an update about AAPL price.
     $AAPL 1y        -- Reply with an ASCII art graph of AAPL price during
-                       the past year. Valid intervals are: 1d|5d|1m|6m|1y
+                       the past year. Valid intervals are: 1d|5d|1m|6m|1y|5y
     $AAPL mc        -- Reply with the result of a Montecarlo simulation on
                        the 52 weeks price of the specified stock. You can
                        say "montecarlo" instead of "mc" if you want.
