@@ -2587,11 +2587,11 @@ void *scanStocksThread(void *arg) {
          * the last two months, detecting big changes. */
         mcres mcvl, mclong, mcshort, mcvs, mcday;
         volres vol10;
-        computeMontecarlo(yd,253*5,1000,5,&mcvl);
-        computeMontecarlo(yd,253,1000,5,&mclong);
-        computeMontecarlo(yd,50,1000,5,&mcshort);
-        computeMontecarlo(yd,20,1000,5,&mcvs);
-        computeMontecarlo(yd,10,1000,1,&mcday);
+        computeMontecarlo(yd,253*5,1000,5,&mcvl);   /* 5y */
+        computeMontecarlo(yd,253,1000,5,&mclong);   /* 1y */
+        computeMontecarlo(yd,60,1000,5,&mcshort);   /* 3m */
+        computeMontecarlo(yd,20,1000,5,&mcvs);      /* 1m */
+        computeMontecarlo(yd,10,1000,1,&mcday);     /* 15d */
         computeVolatility(yd,10,&vol10);
 
         /* Cache the stock data we want to use later, then free the
@@ -2643,7 +2643,7 @@ void *scanStocksThread(void *arg) {
             mcshort.gain > 3 &&             /* Good in the short. */
             mcvs.gain > 4 &&                /* Outstanding in the short. */
             mcday.gain > 1 &&               /* Doing well right now. */
-            price > 80)                     /* Not penny stock. */
+            price > 45)                     /* No penny stocks. */
         {
             printf("evenbetter: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("evenbetter", symbol);
