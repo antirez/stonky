@@ -53,8 +53,11 @@ The bot supports the concept of "list of stocks", you can add stocks to
 a list, then query the list to have all the prices with a single message:
 
     $mylist: +VMW +AAPL +T -KO  -- Modify the list adding/removing stocks.
-    $mylist:                    -- Ask prices of stocks in a given list.
-    $mylist: ?                  -- Just show the stocks in the list.
+    $mylist:                    -- Ask day change of stocks in a given list.
+    $mylist::                   -- Ask details of stocks in a given list.
+    $mylist: ?                  -- Just show the stocks in the list without
+                                   any additional info. This works without
+                                   contacting the Yahoo API at all.
     $$ ls                       -- Show all the defined lists
 
 ## Portfolio support

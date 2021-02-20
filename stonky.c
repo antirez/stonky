@@ -58,6 +58,7 @@
 /* Flags potentially used for multiple functions. */
 #define STONKY_NOFLAGS 0        /* No special flags. */
 #define STONKY_SHORT (1<<0)     /* Use short form for some output. */
+#define STONKY_VERY_SHORT (1<<1)  /* Use even less space. */
 
 int AutoListsMode = 1; /* Scan to populate auto lists. */
 int DebugMode = 0; /* If true enables debugging info (--debug option). */
@@ -1602,7 +1603,8 @@ void computeVolatility(ydata *yd, int range, volres *vr) {
  * to the specified SDS string.
  *
  * If flag is 0 (or STONKY_NOFLAGS), the function runs normally.
- * If flag is STONKY_SHORT, a formatting using less space is used. */
+ * If flag is STONKY_SHORT, a formatting using less space is used.
+ * If flag is STONKY_VERY_SHORT, even less space is used. */
 sds sdsCatPriceRequest(sds s, sds symbol, ydata *yd, int flags) {
     if (yd == NULL) {
         s = sdscatprintf(s,
@@ -1622,7 +1624,15 @@ sds sdsCatPriceRequest(sds s, sds symbol, ydata *yd, int flags) {
     if (change >= 0) emoidx = 2;
     if (change > 8) emoidx = 3;
 
-    if (flags & STONKY_SHORT) {
+    if (flags & STONKY_VERY_SHORT) {
+        s = sdscatprintf(s,
+            "%s[%s](https://google.com/search?q=%s+stock) %s%s",
+            emoset[emoidx],
+            yd->symbol,
+            yd->symbol,
+            (yd->regchange && yd->regchange[0] == '-') ? "" : "+",
+            yd->regchange);
+    } else if (flags & STONKY_SHORT) {
         s = sdscatprintf(s,
             "%s[%s](https://google.com/search?q=%s+stock): %.02f%s (%s%s)",
             emoset[emoidx],
@@ -1650,16 +1660,20 @@ sds sdsCatPriceRequest(sds s, sds symbol, ydata *yd, int flags) {
             yd->symbol,
             (int)yd->pretime, (int)yd->regtime, (int)yd->posttime);
     }
-    if (yd->pretime > yd->regtime) {
-        s = sdscatprintf(s," | %s: %.02f%s (%s%s)",
-            (flags & STONKY_SHORT) ? "pre" : "pre-market",
-            yd->pre, yd->csym, yd->prechange[0] == '-' ? "" : "+",
-            yd->prechange);
-    } else if (yd->posttime > yd->regtime) {
-        s = sdscatprintf(s," | %s: %.02f%s (%s%s)",
-            (flags & STONKY_SHORT) ? "post" : "after-hours",
-            yd->post, yd->csym, yd->postchange[0] == '-' ? "" : "+",
-            yd->postchange);
+
+    /* Add premarket / afterhours info. */
+    if (!(flags & STONKY_VERY_SHORT)) {
+        if (yd->pretime > yd->regtime) {
+            s = sdscatprintf(s," | %s: %.02f%s (%s%s)",
+                (flags & STONKY_SHORT) ? "pre" : "pre-market",
+                yd->pre, yd->csym, yd->prechange[0] == '-' ? "" : "+",
+                yd->prechange);
+        } else if (yd->posttime > yd->regtime) {
+            s = sdscatprintf(s," | %s: %.02f%s (%s%s)",
+                (flags & STONKY_SHORT) ? "post" : "after-hours",
+                yd->post, yd->csym, yd->postchange[0] == '-' ? "" : "+",
+                yd->postchange);
+        }
     }
     return s;
 }
@@ -1922,8 +1936,16 @@ void parseQuantityAndPrice(const char *str, int64_t *quantity, double *price) {
 
 /* Handle list requests. */
 void botHandleListRequest(botRequest *br, sds *argv, int argc) {
+    int verb = 0; /* Verbosity level. Increases for every additional
+                     trailing ":" after the list name. */
+
     /* Remove the final ":" from the list name. */
-    sds listname = sdsnewlen(argv[0],sdslen(argv[0])-1);
+    sds listname = sdsdup(argv[0]);
+    do {
+        verb++;
+        sdsrange(listname,0,-2);
+    } while(listname[sdslen(listname)-1] == ':');
+    verb--;
     sds reply = NULL;
 
     if (argc == 1) {
@@ -1943,13 +1965,18 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
                     fetched++;
                     avg += strtod(yd->regchange,NULL);
                 }
-                reply = sdsCatPriceRequest(reply,stocks[j],yd,STONKY_SHORT);
+                int format = verb > 0 ? STONKY_SHORT : STONKY_VERY_SHORT;
+                reply = sdsCatPriceRequest(reply,stocks[j],yd,format);
                 freeYahooData(yd);
-                reply = sdscat(reply,"\n");
+                if (verb > 0 || (j % 2)) {
+                    reply = sdscat(reply,"\n");
+                } else {
+                    reply = sdscat(reply," | ");
+                }
             }
             if (fetched) {
                 reply = sdscatprintf(reply,
-                    "%d stocks. Average performance: %.2f%%:\n",
+                    "%d stocks. Average performance: %.2f%%.\n",
                     fetched, avg/fetched);
             }
         }
@@ -2379,7 +2406,8 @@ void *botHandleRequest(void *arg) {
 "$AAPL 1d|5d|1m|6m|1y     | Show AAPL price chart for period\n"
 "$mylist: +VMW +AAPL -KO  | Modify the list.\n"
 "$mylist:                 | Ask prices of whole list.\n"
-"$mylist: ?               | Show stocks in the list.\n"
+"$mylist::                | Like $mylist: but more verbose.\n"
+"$mylist: ?               | Show just stock names.\n"
 "$AAPL mc                 | Montecarlo simulation.\n"
 "$AAPL mc range 60        | Specify Montecarlo range.\n"
 "$APPL mc period 5        | Specify Sell/Buy fixed period.\n"
