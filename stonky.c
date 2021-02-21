@@ -1009,7 +1009,7 @@ sds kvGet(const char *key) {
     sqlSelect(&row,"SELECT expire,value FROM KeyValue WHERE key=?s",key);
     if (sqlNextRow(&row)) {
         int64_t expire = row.col[0].i;
-        if (0 && expire && expire < time(NULL)) {
+        if (expire && expire < time(NULL)) {
             sqlQuery("DELETE FROM KeyValue WHERE key=?s",key);
         } else {
             value = sdsnewlen(row.col[1].s,row.col[1].i);
@@ -2637,7 +2637,7 @@ void *scanStocksThread(void *arg) {
              * for some reason. Many will be penny stocks. */
             mcshort.gain <  mcvs.gain && /* Are getting better. */
             mcvs.gain > 8 &&             /* Very high gains recently. */
-            mclong.gain < 1 &&           /* Not too strong historically. */
+            mclong.gain < 3 &&           /* Not too strong historically. */
             mcday.gain > 1 &&            /* High gains in few last days. */
             mcday.absdiffper < 100)      /* Consistency in few last days. */
         {
