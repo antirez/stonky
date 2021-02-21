@@ -1009,7 +1009,7 @@ sds kvGet(const char *key) {
     sqlSelect(&row,"SELECT expire,value FROM KeyValue WHERE key=?s",key);
     if (sqlNextRow(&row)) {
         int64_t expire = row.col[0].i;
-        if (expire && expire < time(NULL)) {
+        if (0 && expire && expire < time(NULL)) {
             sqlQuery("DELETE FROM KeyValue WHERE key=?s",key);
         } else {
             value = sdsnewlen(row.col[1].s,row.col[1].i);
@@ -1996,7 +1996,7 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
         ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
         if (yd == NULL) {
             reply = sdscatprintf(sdsempty(),
-                "Stock symbol %s not found", symbol);
+                "Stock symbol %s not found.", symbol);
             goto fmterr;
         }
         if (price == 0) price = yd->reg;
@@ -2005,11 +2005,21 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
         /* Ready to materialize the buy operation on the DB. */
         stockpack sp;
         if (dbBuyStocks(listname,symbol,price,quantity,&sp) == C_ERR) {
-            reply = sdsnew("Error adding the stock pack");
+            reply = sdsnew("Error adding the stock pack.");
         } else {
             reply = sdscatprintf(sdsempty(),
-                "Now you have %d %s stocks at an average price of %.2f",
+                "Now you have %d %s stocks at an average price of %.2f.",
                 (int)sp.quantity,symbol,sp.avgprice);
+        }
+    } else if (!strcasecmp(argv[1],"rm-sell") && argc == 3) {
+        int64_t id = strtoll(argv[2],NULL,10);
+        if (id) {
+            int found = sqlQuery("DELETE FROM ProfitLoss WHERE rowid=?i",id);
+            reply = sdsnew(found ?
+                            "History entry removed." :
+                            "History entry not found.");
+        } else {
+            reply = sdsnew("Please specify a valid ID.");
         }
     } else if (!strcasecmp(argv[1],"sell") && (argc == 3 || argc == 4)) {
         /* $list: sell [quantity] */
@@ -2024,7 +2034,7 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
         ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
         if (yd == NULL) {
             reply = sdscatprintf(sdsempty(),
-                "Stock symbol %s not found", symbol);
+                "Stock symbol %s not found.", symbol);
             goto fmterr;
         }
         if (sellprice == 0) sellprice = yd->reg;
@@ -2032,19 +2042,19 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
         stockpack sp;
         if (!dbSellStocks(listname,symbol,quantity,sellprice,yd->csym,&sp)) {
             if (sp.quantity < 0) {
-                reply = sdsnew("You don't have enough stocks to sell");
+                reply = sdsnew("You don't have enough stocks to sell.");
             } else {
-                reply = sdsnew("Error removing from the stock pack");
+                reply = sdsnew("Error removing from the stock pack.");
             }
         } else {
             if (sp.quantity != 0) {
                 reply = sdscatprintf(sdsempty(),
                     "You are left with %d %s stocks at an average "
-                    "price of %.2f",
+                    "price of %.2f.",
                     (int)sp.quantity,symbol,sp.avgprice);
             } else {
                 reply = sdscatprintf(sdsempty(),
-                    "You no longer own %s stocks",symbol);
+                    "You no longer own %s stocks.",symbol);
             }
         }
         freeYahooData(yd);
@@ -2060,7 +2070,7 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
             } else if (argv[j][0] == '?') {
                 /* Do nothing, we want just the list of symbols. */
             } else {
-                reply = sdsnew("Syntax error: use +AAPL -TWTR and so forth");
+                reply = sdsnew("Syntax error: use +AAPL -TWTR and so forth.");
                 goto fmterr;
             }
         }
@@ -2232,7 +2242,7 @@ void botHandleShowProfitLossRequest(botRequest *br, int argc, sds *argv) {
     }
 
     sqlRow row;
-    if (sqlSelect(&row,"SELECT * FROM ProfitLoss WHERE listid=?i "
+    if (sqlSelect(&row,"SELECT rowid,* FROM ProfitLoss WHERE listid=?i "
                        "ORDER BY selltime DESC", listid) != SQLITE_ROW)
     {
         reply = sdsnew("No sells history for this portfolio");
@@ -2243,7 +2253,7 @@ void botHandleShowProfitLossRequest(botRequest *br, int argc, sds *argv) {
     double total = 0;
     reply = sdsnew("```\n");
     while(sqlNextRow(&row)) {
-        const char *symbol = row.col[0].s;
+        const char *symbol = row.col[1].s;
 
         /* Filter for pattern if any. */
         if (pattern) {
@@ -2251,13 +2261,14 @@ void botHandleShowProfitLossRequest(botRequest *br, int argc, sds *argv) {
                 continue;
         }
 
-        time_t selltime = row.col[2].i;
-        int quantity = row.col[3].i;
-        double buyprice = row.col[4].d;
-        double sellprice = row.col[5].d;
+        int64_t id = row.col[0].i;
+        time_t selltime = row.col[3].i;
+        int quantity = row.col[4].i;
+        double buyprice = row.col[5].d;
+        double sellprice = row.col[6].d;
         double diff = (sellprice-buyprice)*quantity;
         double diffperc = ((sellprice/buyprice)-1)*100;
-        const char *csym = row.col[6].s;
+        const char *csym = row.col[7].s;
         sds ago = sdsTimeAgo(selltime);
 
         /* One symbol for every 10% of change. */
@@ -2269,7 +2280,8 @@ void botHandleShowProfitLossRequest(botRequest *br, int argc, sds *argv) {
         } while(aux >= 10);
 
         reply = sdscatprintf(reply,
-            "%-7s: %d sold at %.2f%s (P/L %s%.2f %s%.2f%% %s), %s ago\n",
+            "[%lld] %-7s: %d sold at %.2f%s (P/L %s%.2f %s%.2f%% %s), %s ago\n",
+            (long long)id,
             symbol, quantity, sellprice*quantity, csym,
             (diff >= 0) ? "+" : "", diff,
             (diffperc >= 0) ? "+" : "", diffperc,
@@ -2423,6 +2435,7 @@ void *botHandleRequest(void *arg) {
 "$mylist: sell AAPL 10@35 | Sell 10 AAPL stocks at 35$ each.\n"
 "$mylist: sell AAPL 10    | Sell 10 AAPL stocks at current price.\n"
 "$mylist: sell AAPL       | Sell all AAPL stocks at current price.\n"
+"$mylist: rm-sell <id>    | Remove sell with specified ID.\n"
 "$mylist? [pattern]       | Show portfolio associated with mylist.\n"
 "$mylist?? [pattern]      | Show portfolio profit and loss history.\n"
 "$$ ls                    | Show all the available lists.\n"
@@ -2624,7 +2637,7 @@ void *scanStocksThread(void *arg) {
              * for some reason. Many will be penny stocks. */
             mcshort.gain <  mcvs.gain && /* Are getting better. */
             mcvs.gain > 8 &&             /* Very high gains recently. */
-            mclong.gain < 5 &&           /* Not too strong historically. */
+            mclong.gain < 1 &&           /* Not too strong historically. */
             mcday.gain > 1 &&            /* High gains in few last days. */
             mcday.absdiffper < 100)      /* Consistency in few last days. */
         {
