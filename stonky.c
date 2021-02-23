@@ -2471,7 +2471,12 @@ void *botHandleRequest(void *arg) {
  * send broadcast messages to all the channels where the bot is used. */
 void botUpdateActiveChannels(int64_t id) {
     for (int i = 0; i < ActiveChannelsCount; i++) {
-        if (ActiveChannels[i] == id) return;
+        if (ActiveChannels[i] == id) {
+            /* Channel already in the list of active channels.
+             * Update the last activity time. */
+            ActiveChannelsLast[ActiveChannelsCount] = time(NULL);
+            return;
+        }
     }
     /* Not found, add it. */
     ActiveChannels[ActiveChannelsCount] = id;
