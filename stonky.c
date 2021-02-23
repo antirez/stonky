@@ -69,10 +69,13 @@ _Thread_local sqlite3 *DbHandle = NULL; /* Per-thread sqlite handle. */
 sds BotApiKey = NULL;                   /* Telegram API key for the bot. */
 sds *Symbols; /* Global list of symbols loaded from marketdata/symbols.txt */
 int NumSymbols; /* Number of elements in Symbols. */
+sds *Fortune;   /* Stock market famous quotes. */
+int NumFortune; /* Number of elements in Fortune. */
 _Atomic double EURUSD = 0; /* EURUSD change, refreshed in background. */
 int ScanPause = 1000000;   /* In microseconds. Default 1 second. */
 int CacheYahoo = 0;        /* Perform Yahoo queries caching. */
 _Atomic int64_t ActiveChannels[64]; /* Channels we received a message from. */
+_Atomic int64_t ActiveChannelsLast[64]; /* Timestamp of last msg. */
 int ActiveChannelsCount = 0;        /* Number of active channels. */
 
 /* Global stats. Sometimes we access such stats from threads without caring
@@ -2472,6 +2475,7 @@ void botUpdateActiveChannels(int64_t id) {
     }
     /* Not found, add it. */
     ActiveChannels[ActiveChannelsCount] = id;
+    ActiveChannelsLast[ActiveChannelsCount] = time(NULL);
     ActiveChannelsCount++;
 }
 
@@ -2890,6 +2894,29 @@ void *bigMoversThread(void *arg) {
     }
 }
 
+/* Send stock market famous quotes on active channels, from time to time. */
+void *fortuneThread(void *arg) {
+    UNUSED(arg);
+    time_t lastbcast = time(NULL);
+    time_t mindelay = 3600; /* Min time between fortune broadcasting. */
+    time_t minact = 60*5; /* Min time elapsed since last channel activity. */
+
+    while(1) {
+        sleep(1);
+        if (time(NULL)-lastbcast < mindelay) continue;
+        sds quote = Fortune[rand() % NumFortune];
+        for (int j = 0; j < ActiveChannelsCount; j++) {
+            /* Skip channels that are idle right now. This is useful both
+             * to give a sense of liveness to the bot, that talks when
+             * others are talking, than to avoid notifications at night
+             * when other users are otherwise silent. */
+            if (time(NULL)-ActiveChannelsLast[j] > minact) continue;
+            botSendMessage(ActiveChannels[j],quote,0);
+        }
+        lastbcast = time(NULL);
+    }
+}
+
 /* Start background threads continuously doing certain tasks. */
 void startBackgroundTasks(void) {
     pthread_t tid;
@@ -2911,6 +2938,12 @@ void startBackgroundTasks(void) {
 
     /* Big movers periodic message. */
     if (pthread_create(&tid,NULL,bigMoversThread,NULL) != 0) {
+        printf("Can't the big movers thread\n");
+        exit(1);
+    }
+
+    /* Fortune thread. */
+    if (pthread_create(&tid,NULL,fortuneThread,NULL) != 0) {
         printf("Can't the big movers thread\n");
         exit(1);
     }
@@ -3011,6 +3044,7 @@ int main(int argc, char **argv) {
     cJSON_Hooks jh = {.malloc_fn = xmalloc, .free_fn = xfree};
     cJSON_InitHooks(&jh);
     Symbols = loadFile("marketdata/symbols.txt",&NumSymbols,1);
+    Fortune = loadFile("fortune.txt",&NumFortune,1);
     startBackgroundTasks();
 
     /* Enter the infinite loop handling the bot. */
