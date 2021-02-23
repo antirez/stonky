@@ -2553,15 +2553,16 @@ fmterr:
  * Periodic scanning of symbols looking for stocks having dramatic changes
  * ===========================================================================*/
 
-/* Load symbols in the global Symbols array, also populating NumSymbols.
- * If the file can't be loaded C_ERR is returned. On success the function
- * returns C_OK. */
-int loadSymbols(void) {
-    if (Symbols != NULL) return C_ERR; /* Already loaded. */
-    FILE *fp = fopen("marketdata/symbols.txt","r");
-    if (fp == NULL) return C_ERR;
+/* Load a file, line by line, in an array of SDS strings.
+ * Returns the array pointer and populates 'count' by reference.
+ * On error NULL is returned .*/
+sds *loadFile(char *filename, int *count, int shuffle) {
+    FILE *fp = fopen(filename,"r");
+    if (fp == NULL) return NULL;
 
     char buf[1024];
+    sds *lines = NULL;
+    int num = 0;
     while (fgets(buf,sizeof(buf),fp) != NULL) {
         buf[sizeof(buf)-1] = '\0';
         for (unsigned int i = 0; buf[i] && i < sizeof(buf); i++) {
@@ -2570,23 +2571,24 @@ int loadSymbols(void) {
                 break;
             }
         }
-        Symbols = xrealloc(Symbols,sizeof(sds)*(NumSymbols+1));
-        Symbols[NumSymbols++] = sdsnew(buf);
+        lines = xrealloc(lines,sizeof(sds)*(num+1));
+        lines[num++] = sdsnew(buf);
     }
     fclose(fp);
 
     /* Shuffle them: since we don't store the symbols in a database,
      * we want to start scanning them in different order at every
      * restart. */
-    for (int j = 0; j < NumSymbols; j++) {
-        int with = rand() % NumSymbols;
-        sds aux = Symbols[j];
-        Symbols[j] = Symbols[with];
-        Symbols[with] = aux;
+    for (int j = 0; shuffle && j < num; j++) {
+        int with = rand() % num;
+        sds aux = lines[j];
+        lines[j] = lines[with];
+        lines[with] = aux;
     }
 
-    if (VerboseMode) printf("%d Symbols loaded\n", NumSymbols);
-    return C_OK;
+    if (VerboseMode) printf("%s loaded (%d lines)\n", filename, num);
+    *count = num;
+    return lines;
 }
 
 /* This thread continuously scan stocks looking for ones that have certain
@@ -3008,7 +3010,7 @@ int main(int argc, char **argv) {
     if (DbHandle == NULL) exit(1);
     cJSON_Hooks jh = {.malloc_fn = xmalloc, .free_fn = xfree};
     cJSON_InitHooks(&jh);
-    loadSymbols();
+    Symbols = loadFile("marketdata/symbols.txt",&NumSymbols,1);
     startBackgroundTasks();
 
     /* Enter the infinite loop handling the bot. */
