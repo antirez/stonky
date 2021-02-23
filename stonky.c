@@ -60,6 +60,12 @@
 #define STONKY_SHORT (1<<0)     /* Use short form for some output. */
 #define STONKY_VERY_SHORT (1<<1)  /* Use even less space. */
 
+/* Telegram response json field prefix
+ * Messages from direct messages use "message"
+ * Messages from the watched channel use "channel_post" */
+#define TGRAM_DM "message"
+#define TGRAM_CM "channel_post"
+ 
 int AutoListsMode = 1; /* Scan to populate auto lists. */
 int DebugMode = 0; /* If true enables debugging info (--debug option). */
 int VerboseMode = 0; /* If true enables verbose info (--verbose && --debug) */
@@ -2515,21 +2521,25 @@ int64_t botProcessUpdates(int64_t offset, int timeout) {
         if (update_id == NULL) continue;
         int64_t thisoff = (int64_t) update_id->valuedouble;
         if (thisoff > offset) offset = thisoff;
-        cJSON *chatid = cJSON_Select(update,".message.chat.id:n");
+        sds prefix = sdsnew(TGRAM_CM);
+        if (cJSON_Select(update,"." TGRAM_CM) == NULL) {
+            prefix = sdsnew(TGRAM_DM);
+        }
+        cJSON *chatid = cJSON_Select(update,sdscatprintf(sdsempty(), ".%s.chat.id:n", prefix));
         if (chatid == NULL) continue;
         int64_t target = (int64_t) chatid->valuedouble;
-        cJSON *chattype = cJSON_Select(update,".message.chat.type:s");
+        cJSON *chattype = cJSON_Select(update,sdscatprintf(sdsempty(), ".%s.chat.type:s", prefix));
         if (chattype != NULL) {
             if (!strcasecmp(chattype->valuestring,"group")) {
                 botUpdateActiveChannels(target);
             }
         }
-        cJSON *date = cJSON_Select(update,".message.date:n");
+        cJSON *date = cJSON_Select(update,sdscatprintf(sdsempty(), ".%s.date:n", prefix));
         if (date == NULL) continue;
         time_t timestamp = date->valuedouble;
-        cJSON *text = cJSON_Select(update,".message.text:s");
+        cJSON *text = cJSON_Select(update,sdscatprintf(sdsempty(), ".%s.text:s", prefix));
         if (text == NULL) continue;
-        if (VerboseMode) printf(".message.text: %s\n", text->valuestring);
+        if (VerboseMode) printf(".%s.text: %s\n", prefix, text->valuestring);
 
         /* Sanity check the request before starting the thread:
          * validate that is a request that is really targeting our bot. */
