@@ -72,6 +72,8 @@ int NumSymbols; /* Number of elements in Symbols. */
 _Atomic double EURUSD = 0; /* EURUSD change, refreshed in background. */
 int ScanPause = 1000000;   /* In microseconds. Default 1 second. */
 int CacheYahoo = 0;        /* Perform Yahoo queries caching. */
+_Atomic int64_t ActiveChannels[64]; /* Channels we received a message from. */
+int ActiveChannelsCount = 0;        /* Number of active channels. */
 
 /* Global stats. Sometimes we access such stats from threads without caring
  * about race conditions, since they in practice are very unlikely to happen
@@ -864,7 +866,7 @@ ydata *getYahooData(int type, const char *symbol, const char *range, const char 
             yd->pretime = aux->valuedouble;
         if ((aux = cJSON_Select(price,".postMarketTime:n")) != NULL)
             yd->posttime = aux->valuedouble;
-        if ((aux = cJSON_Select(price,".regMarketTime:n")) != NULL)
+        if ((aux = cJSON_Select(price,".regularMarketTime:n")) != NULL)
             yd->regtime = aux->valuedouble;
         if ((aux = cJSON_Select(price,".symbol:s")) != NULL)
             yd->symbol = sdsnew(aux->valuestring);
@@ -2372,10 +2374,17 @@ void *botHandleRequest(void *arg) {
             /* $$ info */
             char buf[1024];
             sds ago = sdsTimeAgo(botStats.start_time);
-            snprintf(buf,sizeof(buf),"Hey, I was started %s ago, served %llu queries and scanned, in the background, %llu stocks searching for good ones.",
+
+            snprintf(buf,sizeof(buf),
+                "Hey, a few info about me.\n"
+                "uptime: %s\n"
+                "queries: %llu\n"
+                "scanned: %llu\n"
+                "active-channels: %d",
                 ago,
                 (unsigned long long)botStats.queries,
-                (unsigned long long)botStats.scanned);
+                (unsigned long long)botStats.scanned,
+                (int)ActiveChannelsCount);
             sdsfree(ago);
             botSendMessage(br->target,buf,0);
         } else {
@@ -2454,6 +2463,18 @@ void *botHandleRequest(void *arg) {
     return NULL;
 }
 
+/* This function udpates the list of channels for which the bot received
+ * at least a message since it was started. The list is used in order to
+ * send broadcast messages to all the channels where the bot is used. */
+void botUpdateActiveChannels(int64_t id) {
+    for (int i = 0; i < ActiveChannelsCount; i++) {
+        if (ActiveChannels[i] == id) return;
+    }
+    /* Not found, add it. */
+    ActiveChannels[ActiveChannelsCount] = id;
+    ActiveChannelsCount++;
+}
+
 /* Get the updates from the Telegram API, process them, and return the
  * ID of the highest processed update.
  *
@@ -2488,6 +2509,12 @@ int64_t botProcessUpdates(int64_t offset, int timeout) {
         cJSON *chatid = cJSON_Select(update,".message.chat.id:n");
         if (chatid == NULL) continue;
         int64_t target = (int64_t) chatid->valuedouble;
+        cJSON *chattype = cJSON_Select(update,".message.chat.type:s");
+        if (chattype != NULL) {
+            if (!strcasecmp(chattype->valuestring,"group")) {
+                botUpdateActiveChannels(target);
+            }
+        }
         cJSON *date = cJSON_Select(update,".message.date:n");
         if (date == NULL) continue;
         time_t timestamp = date->valuedouble;
@@ -2714,6 +2741,153 @@ void *cvThread(void *arg) {
     }
 }
 
+/* Big movers thread -- This thread notifies all the active channels where
+ * the bot is about the stocks that had the most dramatic change in the
+ * current day of exchange. The only stocks considered are the ones present
+ * in any of the lists defined in the bot. */
+
+/* This struct represent a single big mover stock. We need to sort all
+ * the stocks to get the best/worst N. */
+typedef struct bmStock {
+    double change;
+    ydata *yd;
+} bmStock;
+
+/* Qsort() compare method for bmStock items. */
+int bmStockCompare(const void *a, const void *b) {
+    const bmStock *bma = a, *bmb = b;
+    if (bma->change > bmb->change) return 1;
+    if (bma->change < bmb->change) return -1;
+    return 0;
+}
+
+/* Big movers stocks message generation. Take every stock in every list once,
+ * check the current price, create a message with the best/worst ones. */
+sds genBigMoversMessage(void) {
+    sqlRow row;
+    sqlSelect(&row,
+        "SELECT DISTINCT symbol FROM ListStock ORDER BY symbol");
+
+    int numstocks = 0;
+    bmStock *stocks = NULL;
+    while(sqlNextRow(&row)) {
+        const char *sym = row.col[0].s;
+        ydata *yd = getYahooData(YDATA_QUOTE,sym,NULL,NULL);
+        if (yd) {
+            stocks = xrealloc(stocks,(numstocks+1)*sizeof(bmStock));
+            bmStock *s = stocks+numstocks;
+            s->change = strtod(yd->regchange,NULL);
+            s->yd = yd;
+            numstocks++;
+        }
+    }
+
+    /* Sort the stocks by change. */
+    qsort(stocks,numstocks,sizeof(bmStock),bmStockCompare);
+
+    /* Create the message to send. */
+    sds reply = sdsnew("Big movers: ");
+    int top = numstocks/2;
+    if (top > 10) top = 10;
+
+    for (int j = numstocks-1; j >= numstocks-top; j--) {
+        reply = sdsCatPriceRequest(reply,stocks[j].yd->symbol,
+                                   stocks[j].yd,STONKY_VERY_SHORT);
+    }
+    for (int j = top-1; j >= 0; j--) {
+        reply = sdsCatPriceRequest(reply,stocks[j].yd->symbol,
+                                   stocks[j].yd,STONKY_VERY_SHORT);
+    }
+    /* Cleanup. */
+    for (int j = 0; j < numstocks; j++) freeYahooData(stocks[j].yd);
+    xfree(stocks);
+    return reply;
+}
+
+/* Function that actually does the work, once opening/closing of the
+ * markets is detected, to broadcast the message with the stocks that
+ * moved much. */
+void broadcastBigMovers(void) {
+    sds reply = genBigMoversMessage();
+    for (int j = 0; j < ActiveChannelsCount; j++) {
+        botSendMessage(ActiveChannels[j],reply,0);
+    }
+    sdsfree(reply);
+}
+
+void *bigMoversThread(void *arg) {
+    UNUSED(arg);
+    static time_t lastbcast = 0 ;    /* Last time we broadcasted big movers. */
+    static time_t lastpricetime = 0; /* Last AAPL time tag. */
+    static time_t lastdelta = 0;     /* Last time difference between the
+                                        current time and the stock price
+                                        time. */
+
+    DbHandle = dbInit(1);
+    while(1) {
+        sleep(1); /* Whatever happens, don't burn CPU in a loop. */
+
+        /* Get a reference stock, just in order to check the
+         * time at which the last price was available.*/
+        ydata *yd = getYahooData(YDATA_QUOTE,"AAPL",NULL,NULL);
+        if (yd == NULL) continue;
+
+        /* The algorithm works like this: we want to output the
+         * big movers when the markets just opened, and when the
+         * reference market just opened and when it just closed.
+         * This depends on the reference symbol we choosed above (AAPL).
+         *
+         * How we know the market just opened or closed? It happens when
+         * the time difference between the time associated with the price
+         * we got for the stock, and the current time, used to be
+         * bigger and now is more or less zero.
+         *
+         * Or, in the case of closing markets, when the time used to be
+         * more or less zero and now is getting big again. */
+        time_t pricetime = yd->regtime;
+        time_t delta = llabs(time(NULL)-pricetime);
+
+        /* If this is the first time we obtain the time tag for the
+         * price, we just do the first initialization of the current
+         * state, and iterate again. */
+        if (lastpricetime == 0) {
+            lastpricetime = pricetime;
+            lastdelta = delta;
+            continue;
+        }
+
+        /* Check if the delta is now approaching zero or diverging
+         * from zero. */
+        if (DebugMode)
+            printf("Bigmovers: D: %d, LD: %d\n", (int) delta, (int) lastdelta);
+        time_t alpha = 60*16; /* We select a big enough limit the two deltas
+                                 should be in/out. This is useful because for
+                                 certain reference stocks we would like to use
+                                 instead of AAPL, there are data sources delays
+                                 and we want the algo to work anyway. */
+
+#if 0
+        /* Debugging: simulate an opening condition. */
+        lastdelta = alpha+1; delta = alpha-1;
+#endif
+
+        if (((lastdelta >= alpha && delta < alpha) ||
+             (lastdelta < alpha && delta >= alpha)) &&
+             time(NULL)-lastbcast >= 3600) /* Max once every hour. */
+        {
+            /* Markets opening or closing detected. We can broadcast. */
+            if (VerboseMode) printf("Bigmovers: open/close detected.\n");
+            broadcastBigMovers();
+
+            /* Don't spam again for a while. */
+            lastbcast = time(NULL);
+        }
+
+        lastpricetime = pricetime;
+        lastdelta = delta;
+    }
+}
+
 /* Start background threads continuously doing certain tasks. */
 void startBackgroundTasks(void) {
     pthread_t tid;
@@ -2729,8 +2903,13 @@ void startBackgroundTasks(void) {
 
     /* Cached valuations thread. */
     if (pthread_create(&tid,NULL,cvThread,NULL) != 0) {
-        printf("Can't create the thread to scan stocks "
-               "on the background\n");
+        printf("Can't the cached values thread\n");
+        exit(1);
+    }
+
+    /* Big movers periodic message. */
+    if (pthread_create(&tid,NULL,bigMoversThread,NULL) != 0) {
+        printf("Can't the big movers thread\n");
         exit(1);
     }
 }
