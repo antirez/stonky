@@ -2474,7 +2474,7 @@ void botUpdateActiveChannels(int64_t id) {
         if (ActiveChannels[i] == id) {
             /* Channel already in the list of active channels.
              * Update the last activity time. */
-            ActiveChannelsLast[ActiveChannelsCount] = time(NULL);
+            ActiveChannelsLast[i] = time(NULL);
             return;
         }
     }
