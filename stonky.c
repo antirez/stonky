@@ -91,6 +91,7 @@ struct {
 int kvSetLen(const char *key, const char *value, size_t vlen, int64_t expire);
 int kvSet(const char *key, const char *value, int64_t expire);
 sds kvGet(const char *key);
+sds genBigMoversMessage(int count);
 
 /* ============================================================================
  * Allocator wrapper: we want to exit on OOM instead of trying to recover.
@@ -1695,6 +1696,13 @@ void botHandlePriceRequest(botRequest *br, sds symbol) {
     sdsfree(reply);
 }
 
+/* $bigmovers */
+void botHandleBigMoversRequest(botRequest *br) {
+    sds reply = genBigMoversMessage(20);
+    botSendMessage(br->target,reply,0);
+    sdsfree(reply);
+}
+
 /* Handle bot chart requests in the form: $AAPL 1d|5d|1m|6m|1y|5y. */
 void botHandleChartRequest(botRequest *br, sds symbol, sds range) {
     ydata *yd = NULL;
@@ -2407,6 +2415,9 @@ void *botHandleRequest(void *arg) {
         } else {
             botHandleShowProfitLossRequest(br,argc,argv);
         }
+    } else if (argc == 1 && !strcasecmp(argv[0],"bigmovers")) {
+        /* $bigmovers -- best and worse among stocks in defined lists. */
+        botHandleBigMoversRequest(br);
     } else if (argc == 1 && strcasecmp(argv[0],"help")) {
         /* $AAPL */
         botHandlePriceRequest(br,argv[0]);
@@ -2444,6 +2455,7 @@ void *botHandleRequest(void *arg) {
 "$APPL trend              | Montecarlo trend analysis.\n"
 "$AAPL vol                | Volatility analysis.\n"
 "$AAPL vol range 60       | Volatility anal. last 60 market days.\n"
+"$bigmovers               | Best and worse of today.\n"
 "$mylist: buy AAPL 10@50  | Add 10 AAPL stocks at 50$ each.\n"
 "$mylist: buy AAPL 20     | Add 20 AAPL stocks at current price.\n"
 "$mylist: buy AAPL        | Add 1 AAPL stocks at current price.\n"
@@ -2776,8 +2788,10 @@ int bmStockCompare(const void *a, const void *b) {
 }
 
 /* Big movers stocks message generation. Take every stock in every list once,
- * check the current price, create a message with the best/worst ones. */
-sds genBigMoversMessage(void) {
+ * check the current price, create a message with the best/worst ones.
+ * The 'count' parameter tells how many best/worst we want in the message,
+ * so if it's 10, 20 total companies will be included in the message. */
+sds genBigMoversMessage(int count) {
     sqlRow row;
     sqlSelect(&row,
         "SELECT DISTINCT symbol FROM ListStock ORDER BY symbol");
@@ -2788,6 +2802,12 @@ sds genBigMoversMessage(void) {
         const char *sym = row.col[0].s;
         ydata *yd = getYahooData(YDATA_QUOTE,sym,NULL,NULL);
         if (yd) {
+            /* Limit the list to important companies (total capitalization
+             * greater or equal to 10B. */
+            if (yd->cap < 10000000000) {
+                freeYahooData(yd);
+                continue;
+            }
             stocks = xrealloc(stocks,(numstocks+1)*sizeof(bmStock));
             bmStock *s = stocks+numstocks;
             s->change = strtod(yd->regchange,NULL);
@@ -2802,7 +2822,7 @@ sds genBigMoversMessage(void) {
     /* Create the message to send. */
     sds reply = sdsnew("Big movers: ");
     int top = numstocks/2;
-    if (top > 10) top = 10;
+    if (top > count) top = count;
 
     for (int j = numstocks-1; j >= numstocks-top; j--) {
         reply = sdsCatPriceRequest(reply,stocks[j].yd->symbol,
@@ -2822,7 +2842,7 @@ sds genBigMoversMessage(void) {
  * markets is detected, to broadcast the message with the stocks that
  * moved much. */
 void broadcastBigMovers(void) {
-    sds reply = genBigMoversMessage();
+    sds reply = genBigMoversMessage(20);
     for (int j = 0; j < ActiveChannelsCount; j++) {
         botSendMessage(ActiveChannels[j],reply,0);
     }
