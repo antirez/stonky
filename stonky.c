@@ -60,11 +60,11 @@
 #define STONKY_SHORT (1<<0)     /* Use short form for some output. */
 #define STONKY_VERY_SHORT (1<<1)  /* Use even less space. */
 
-/* Telegram response json field prefix
+/* The Telegram response json field prefix
  * Messages from direct messages use "message"
  * Messages from the watched channel use "channel_post" */
-#define TGRAM_DM "message"
-#define TGRAM_CM "channel_post"
+char * const TGRAM_DM = ".message";
+char * const TGRAM_CM = ".channel_post";
  
 int AutoListsMode = 1; /* Scan to populate auto lists. */
 int DebugMode = 0; /* If true enables debugging info (--debug option). */
@@ -2472,6 +2472,15 @@ void *botHandleRequest(void *arg) {
     return NULL;
 }
 
+sds makeJsonPath(sds s, char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    sdsclear(s);
+    sds rv =  sdscatvprintf(s, fmt, ap);
+    va_end(ap);
+    return rv;
+}
+
 /* This function udpates the list of channels for which the bot received
  * at least a message since it was started. The list is used in order to
  * send broadcast messages to all the channels where the bot is used. */
@@ -2509,6 +2518,8 @@ int64_t botProcessUpdates(int64_t offset, int timeout) {
     sds body = makeBotRequest("getUpdates",&res,options,3);
     sdsfree(options[1]);
     sdsfree(options[3]);
+    char *msg_fieldname;
+    sds json_path = sdsempty();
 
     /* Parse the JSON in order to extract the message info. */
     cJSON *json = cJSON_Parse(body);
@@ -2521,25 +2532,29 @@ int64_t botProcessUpdates(int64_t offset, int timeout) {
         if (update_id == NULL) continue;
         int64_t thisoff = (int64_t) update_id->valuedouble;
         if (thisoff > offset) offset = thisoff;
-        sds prefix = sdsnew(TGRAM_CM);
-        if (cJSON_Select(update,"." TGRAM_CM) == NULL) {
-            prefix = sdsnew(TGRAM_DM);
+        msg_fieldname = TGRAM_CM;
+        if (cJSON_Select(update, TGRAM_CM) == NULL) {
+            msg_fieldname = TGRAM_DM;
         }
-        cJSON *chatid = cJSON_Select(update,sdscatprintf(sdsempty(), ".%s.chat.id:n", prefix));
+        json_path = makeJsonPath(json_path, "%s.chat.id:n", msg_fieldname);
+        cJSON *chatid = cJSON_Select(update,json_path);
         if (chatid == NULL) continue;
         int64_t target = (int64_t) chatid->valuedouble;
-        cJSON *chattype = cJSON_Select(update,sdscatprintf(sdsempty(), ".%s.chat.type:s", prefix));
+        json_path = makeJsonPath(json_path, "%s.chat.type:s", msg_fieldname);
+        cJSON *chattype = cJSON_Select(update,json_path);
         if (chattype != NULL) {
             if (!strcasecmp(chattype->valuestring,"group")) {
                 botUpdateActiveChannels(target);
             }
         }
-        cJSON *date = cJSON_Select(update,sdscatprintf(sdsempty(), ".%s.date:n", prefix));
+        json_path = makeJsonPath(json_path, "%s.date:n", msg_fieldname);
+        cJSON *date = cJSON_Select(update,json_path);
         if (date == NULL) continue;
         time_t timestamp = date->valuedouble;
-        cJSON *text = cJSON_Select(update,sdscatprintf(sdsempty(), ".%s.text:s", prefix));
+        json_path = makeJsonPath(json_path, "%s.text:s", msg_fieldname);
+        cJSON *text = cJSON_Select(update,json_path);
         if (text == NULL) continue;
-        if (VerboseMode) printf(".%s.text: %s\n", prefix, text->valuestring);
+        if (VerboseMode) printf("%s.text: %s\n", msg_fieldname, text->valuestring);
 
         /* Sanity check the request before starting the thread:
          * validate that is a request that is really targeting our bot. */
@@ -2565,6 +2580,7 @@ int64_t botProcessUpdates(int64_t offset, int timeout) {
 fmterr:
     cJSON_Delete(json);
     sdsfree(body);
+    sdsfree(json_path);
     return offset;
 }
 
