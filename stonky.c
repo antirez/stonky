@@ -2794,7 +2794,7 @@ int bmStockCompare(const void *a, const void *b) {
 sds genBigMoversMessage(int count) {
     sqlRow row;
     sqlSelect(&row,
-        "SELECT DISTINCT symbol FROM ListStock ORDER BY symbol COLLATE NOCASE");
+        "SELECT DISTINCT UPPER(symbol) FROM ListStock ORDER BY symbol");
 
     int numstocks = 0;
     bmStock *stocks = NULL;
