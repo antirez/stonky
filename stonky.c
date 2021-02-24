@@ -2468,6 +2468,7 @@ void *botHandleRequest(void *arg) {
 "$$ ls                    | Show all the available lists.\n"
 "$$ info                  | Stop bot internal stats.\n"
 "$$ quit <password>       | Stop the bot process.\n"
+"$$ destroy <name> <pass> | Destroy the list, portfolio, P/Ls.\n"
 "$help                    | Show this help.\n"
 "```\n",0);
     } else {
