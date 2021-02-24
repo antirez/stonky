@@ -2472,15 +2472,6 @@ void *botHandleRequest(void *arg) {
     return NULL;
 }
 
-sds makeJsonPath(sds s, char *fmt, ...) {
-    va_list ap;
-    va_start(ap,fmt);
-    sdsclear(s);
-    sds rv =  sdscatvprintf(s, fmt, ap);
-    va_end(ap);
-    return rv;
-}
-
 /* This function udpates the list of channels for which the bot received
  * at least a message since it was started. The list is used in order to
  * send broadcast messages to all the channels where the bot is used. */
@@ -2497,6 +2488,23 @@ void botUpdateActiveChannels(int64_t id) {
     ActiveChannels[ActiveChannelsCount] = id;
     ActiveChannelsLast[ActiveChannelsCount] = time(NULL);
     ActiveChannelsCount++;
+}
+
+/* This function helps make the various json paths
+ * which are needed when querying the json payload from telegram.
+ * Its mostly a thin wrapper to make the string management clean 
+ * and simple while setting the json paths.
+ * 
+ * Its like sdscatprintf, but it resets the sds every time, so it
+ * does not concatenate, but instead clears the sds each time.
+ * */
+sds makeJsonPath(sds s, char *fmt, ...) {
+    va_list ap;
+    va_start(ap,fmt);
+    sdsclear(s);
+    sds rv =  sdscatvprintf(s, fmt, ap);
+    va_end(ap);
+    return rv;
 }
 
 /* Get the updates from the Telegram API, process them, and return the
