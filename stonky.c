@@ -729,6 +729,7 @@ typedef struct ydata {
     time_t pretime;
     time_t posttime;
     time_t regtime;
+    float cap;      /* Total market cap. */
     /* Market percentage change, as a string. */
     sds prechange;
     sds postchange;
@@ -881,6 +882,8 @@ ydata *getYahooData(int type, const char *symbol, const char *range, const char 
             yd->csym = sdsnew(aux->valuestring);
         if ((aux = cJSON_Select(price,".exchangeDataDelayedBy:n")) != NULL)
             yd->delay = aux->valuedouble;
+        if ((aux = cJSON_Select(price,".marketCap.raw:n")) != NULL)
+            yd->cap = aux->valuedouble;
         /* Certain times tha Yahoo API is unable to return actual info
          * from a stock, even if it returns success. */
         if (yd->regchange == NULL) goto fmterr;
