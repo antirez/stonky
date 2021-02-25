@@ -61,7 +61,10 @@
 #define STONKY_VERY_SHORT (1<<1)  /* Use even less space. */
 
 int AutoListsMode = 1; /* Scan to populate auto lists. */
-int DebugMode = 0; /* If true enables debugging info (--debug option). */
+int DebugMode = 0; /* If true enables debugging info (--debug option).
+                      This gets incremented by one at every successive
+                      --debug, so that very verbose stuff are only
+                      enabled with a few --debug calls. */
 int VerboseMode = 0; /* If true enables verbose info (--verbose && --debug) */
 char *DbFile = "./stonky.sqlite";    /* Change with --dbfile. */
 char *AdminPass = NULL;              /* Admin password. */
@@ -1523,7 +1526,7 @@ void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
 
         double gain = (sell_price-buy_price)/buy_price*100;
         gains[j] = gain;
-        if (DebugMode) {
+        if (DebugMode >= 3) {
             printf("Montecarlo buy (%d) %f sell (%d) %f: %f\n",
                 buyday, buy_price, sellday, sell_price, gain);
         }
@@ -1664,7 +1667,7 @@ sds sdsCatPriceRequest(sds s, sds symbol, ydata *yd, int flags) {
             (yd->regchange && yd->regchange[0] == '-') ? "" : "+",
             yd->regchange);
     }
-    if (DebugMode) {
+    if (DebugMode >= 2) {
         printf("%s pretime:%d regtime:%d posttime:%d\n",
             yd->symbol,
             (int)yd->pretime, (int)yd->regtime, (int)yd->posttime);
@@ -3031,7 +3034,7 @@ int main(int argc, char **argv) {
     for (int j = 1; j < argc; j++) {
         int morearg = argc-j-1;
         if (!strcmp(argv[j],"--debug")) {
-            DebugMode = 1;
+            DebugMode++;
             VerboseMode = 1;
         } else if (!strcmp(argv[j],"--noautolists")) {
             AutoListsMode = 0;
