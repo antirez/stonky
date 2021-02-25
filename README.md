@@ -9,7 +9,7 @@ in C and is released under the BSD license.
 1. Create your bot using the Telegram [@BotFather](https://t.me/botfather).
 2. After obtaining your bot API key, store it into a file called `apikey.txt` inside the bot working directory. Alternatively you can use the `--apikey` command line argument to provide your Telegram API key.
 3. Build Stonky: you need libcurl and libsqlite installed. Just type `make`.
-4. Run Stonky with `./stonky`. There is also a debug mode if you run it using the `--debug` option. For a more moderate output use `--verbose`. Try `stonky --help` for the full list of command line options.
+4. Run Stonky with `./stonky`. There is also a debug mode if you run it using the `--debug` option (add --debug multiple times for even more verbose messages). For a more moderate output use `--verbose`. Try `stonky --help` for the full list of command line options.
 5. Add the bot to your Telegram channel.
 6. **IMPORTANT:** The bot *must* be an administrator of the channel in order to read all the messages that are sent in such channel.
 
@@ -135,6 +135,11 @@ pattern in order to show just a subset of matching stocks, like in:
 To get a recap of all the available commands, just send an `$HELP` message
 to the bot.
 
+## Other features
+
+Not all the features may be listed in the readme. Send $HELP to the bot
+for more information about what it is able to do.
+
 ## Background analysis of stocks
 
 If the file `marketdata/symbols.txt` exists in the bot working directory,
@@ -228,6 +233,9 @@ much faster, and is useful for development purposes. This way you can change
 the parameters of the `tothemoon` and other autolists, and check what is
 the result on the selected stocks. Note that this feature will take
 more or les 650 MB of disk space, used by your SQLite database.
+
+You can also use --noevict in addition to --cache if you want to use stale
+data you have in your cache. This is useful for testing.
 
 The cache can be flushed using:
 
