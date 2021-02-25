@@ -77,6 +77,9 @@ int NumFortune; /* Number of elements in Fortune. */
 _Atomic double EURUSD = 0; /* EURUSD change, refreshed in background. */
 int ScanPause = 1000000;   /* In microseconds. Default 1 second. */
 int CacheYahoo = 0;        /* Perform Yahoo queries caching. */
+int NoEvictMode = 0;       /* Don't perform cache eviction nor care about
+                              TTL of things on the cache. This is useful
+                              in order to just use the local DB for scanning. */
 _Atomic int64_t ActiveChannels[64]; /* Channels we received a message from. */
 _Atomic int64_t ActiveChannelsLast[64]; /* Timestamp of last msg. */
 int ActiveChannelsCount = 0;        /* Number of active channels. */
@@ -782,8 +785,20 @@ void freeYahooData(ydata *y) {
  * Valid intervals are: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk,
  * 1mo, 3mo.
  *
- * Note all range and interval combinations are valid. */
-ydata *getYahooData(int type, const char *symbol, const char *range, const char *interval) {
+ * Note all range and interval combinations are valid.
+ *
+ * The 'ttl' argument is only used when the Stonky --cache option is enabled.
+ * It is used in order to cache the Yahoo API replies into the local SQLite
+ * database. This is useful for two reasons: if you are deploying a bot
+ * that serves an high number of users and don't want to hit the Yahoo
+ * API limit, or in case you want to test the auto lists (background scanning
+ * for interesting stocks) doing a full cycle in just a few seconds, especially
+ * if the --noevict option is also used.
+ *
+ * The 'ttl' is specified in seconds, the cached information is retained
+ * for no more than the specified 'ttl'. If 'ttl' is zero, no caching is
+ * used for the call. */
+ydata *getYahooData(int type, const char *symbol, const char *range, const char *interval, int ttl) {
     const char *apihost = "https://query1.finance.yahoo.com";
     sds url;
 
@@ -810,7 +825,7 @@ ydata *getYahooData(int type, const char *symbol, const char *range, const char 
     int res = C_ERR;
 
     /* Try using the cache if possible. */
-    sds body = (type == YDATA_TS && CacheYahoo) ? kvGet(url) : NULL;
+    sds body = (ttl && CacheYahoo) ? kvGet(url) : NULL;
     int cached = body != NULL;
 
     if (body == NULL) {
@@ -829,13 +844,7 @@ ydata *getYahooData(int type, const char *symbol, const char *range, const char 
 
     /* If we are using caching, and we just fetched a fresh version,
      * set it on the cache. */
-    if (CacheYahoo && type == YDATA_TS && !cached) {
-        /* Set a TTL from 6 to 8 hours, so that things will not expire
-         * at the same time, and we'll hit Yahoo servers in a more
-         * soft way. Otherwise the background stocks scanner will end
-         * caching all the symbols nearly at the same time, and they will
-         * expire (and get re-fetched) all about at the same time. */
-        int ttl = (3600*6) + (rand() % (3600*2));
+    if (ttl && CacheYahoo && !cached) {
         kvSet(url,body,ttl);
     }
 
@@ -1021,7 +1030,7 @@ sds kvGet(const char *key) {
     sqlSelect(&row,"SELECT expire,value FROM KeyValue WHERE key=?s",key);
     if (sqlNextRow(&row)) {
         int64_t expire = row.col[0].i;
-        if (expire && expire < time(NULL)) {
+        if (!NoEvictMode && expire && expire < time(NULL)) {
             sqlQuery("DELETE FROM KeyValue WHERE key=?s",key);
         } else {
             value = sdsnewlen(row.col[1].s,row.col[1].i);
@@ -1181,7 +1190,7 @@ typedef struct stockpack {
 /* Populate the fields of the stockpack that can be calculated fetching
  * info from Yahoo. On success C_OK is returned, otherwise C_ERR. */
 int populateStockPackInfo(stockpack *pack, const char *symbol) {
-    ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
+    ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL,10);
 
     size_t len = strlen(symbol);
     if (len >= sizeof(pack->symbol)) len = sizeof(pack->symbol)-1;
@@ -1692,7 +1701,7 @@ sds sdsCatPriceRequest(sds s, sds symbol, ydata *yd, int flags) {
 
 /* Handle bot price requests in the form: $AAPL. */
 void botHandlePriceRequest(botRequest *br, sds symbol) {
-    ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
+    ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL,15);
     sds reply = sdsCatPriceRequest(sdsempty(),symbol,yd,0);
     freeYahooData(yd);
     botSendMessage(br->target,reply,0);
@@ -1738,7 +1747,7 @@ void botHandleChartRequest(botRequest *br, sds symbol, sds range) {
         goto fmterr;
     }
 
-    yd = getYahooData(YDATA_TS,symbol,api_range,api_interval);
+    yd = getYahooData(YDATA_TS,symbol,api_range,api_interval,3600);
     if (yd == NULL) {
         reply = sdscatprintf(reply,"Can't fetch chart data for '%s'",symbol);
     } else {
@@ -1805,7 +1814,7 @@ void botHandleMontecarloRequest(botRequest *br, sds symbol, sds *argv, int argc)
     }
 
     /* Fetch the data. Sometimes we'll not obtain enough data points. */
-    yd = getYahooData(YDATA_TS,symbol,"5y","1d");
+    yd = getYahooData(YDATA_TS,symbol,"5y","1d",3600);
     if (yd == NULL || yd->ts_len < range) {
         reply = sdscatprintf(reply,
             "Can't fetch historical data for '%s', use the range option to "
@@ -1875,7 +1884,7 @@ void botHandleVolatilityRequest(botRequest *br, sds symbol, sds *argv, int argc)
     }
 
     /* Fetch the data. Sometimes we'll not obtain enough data points. */
-    yd = getYahooData(YDATA_TS,symbol,"5y","1d");
+    yd = getYahooData(YDATA_TS,symbol,"5y","1d",3600);
     if (yd == NULL || yd->ts_len < range) {
         reply = sdscatprintf(reply,
             "Can't fetch historical data for '%s', use the range option to "
@@ -1912,7 +1921,7 @@ cleanup:
 /* $STOCK trend request handling. */
 void botHandleTrendRequest(botRequest *br, sds symbol) {
     sds reply = NULL;
-    ydata *yd = getYahooData(YDATA_TS,symbol,"5y","1d");
+    ydata *yd = getYahooData(YDATA_TS,symbol,"5y","1d",3600);
     if (yd == NULL || yd->ts_len < 253) {
         reply = sdscatprintf(sdsempty(),
             "Can't fetch enough historical data for '%s'.",symbol);
@@ -1982,7 +1991,7 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
             double avg = 0;
             int fetched = 0;
             for (int j = 0; j < numstocks; j++) {
-                ydata *yd = getYahooData(YDATA_QUOTE,stocks[j],NULL,NULL);
+                ydata *yd = getYahooData(YDATA_QUOTE,stocks[j],NULL,NULL,60);
                 if (yd) {
                     fetched++;
                     avg += strtod(yd->regchange,NULL);
@@ -2012,7 +2021,7 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
         if (argc == 4) parseQuantityAndPrice(argv[3],&quantity,&price);
 
         /* Check that the symbol exists. */
-        ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
+        ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL,3600);
         if (yd == NULL) {
             reply = sdscatprintf(sdsempty(),
                 "Stock symbol %s not found.", symbol);
@@ -2050,7 +2059,7 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
         if (argc == 4) parseQuantityAndPrice(argv[3],&quantity,&sellprice);
 
         /* Check that the symbol exists. */
-        ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL);
+        ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL,3600);
         if (yd == NULL) {
             reply = sdscatprintf(sdsempty(),
                 "Stock symbol %s not found.", symbol);
@@ -2640,8 +2649,16 @@ void *scanStocksThread(void *arg) {
         botStats.scanned++;
         j++;
 
-        /* Fetch 5y of data. Abort if we have less than 253 prices. */
-        ydata *yd = getYahooData(YDATA_TS,symbol,"5y","1d");
+        /* Fetch 5y of data. Abort if we have less than 253 prices.
+         *
+         * Set a TTL from 6 to 8 hours, so that things will not expire
+         * at the same time, and we'll hit Yahoo servers in a more
+         * soft way. Otherwise the background stocks scanner will end
+         * caching all the symbols nearly at the same time, and they will
+         * expire (and get re-fetched) all about at the same time. */
+        int ttl = (3600*6) + (rand() % (3600*2));
+
+        ydata *yd = getYahooData(YDATA_TS,symbol,"5y","1d",ttl);
         if (yd == NULL || yd->ts_len < 253) {
             freeYahooData(yd);
             continue;
@@ -2663,11 +2680,14 @@ void *scanStocksThread(void *arg) {
         computeMontecarlo(yd,20,1000,5,&mcvs);      /* 1m */
         computeMontecarlo(yd,10,1000,1,&mcday);     /* 15d */
         computeVolatility(yd,10,&vol10);
+        freeYahooData(yd);
 
-        /* Cache the stock data we want to use later, then free the
-         * API data. */
-        double price = 0;
-        if (yd->ts_len) price = yd->ts_data[yd->ts_len-1];
+        /* Now get the price info and cache what we plan to use. */
+        double price = 0, cap = 0;
+        yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL,ttl);
+        if (!yd) continue;
+        price = yd->reg;
+        cap = yd->cap;
         freeYahooData(yd);
 
         int showstats = DebugMode ? 1 : 0;
@@ -2675,14 +2695,14 @@ void *scanStocksThread(void *arg) {
             printf(
             "Scanning %s: VL%.2f(+-%.2f%%) -> L%.2f(+-%.2f%%) ->\n"
             "         S%.2f(+-%.2f%%) -> VS%.2f(+-%.2f%%) -> D%.2f(+-%.2f%%)\n"
-            "         LD %d PD %d LASTPRICE: %.2f\n"
+            "         LD %d PD %d LASTPRICE: %.2f CAP: %.0fM\n"
                 ,symbol,
                 mcvl.gain, mcvl.absdiffper,
                 mclong.gain, mclong.absdiffper,
                 mcshort.gain, mcshort.absdiffper,
                 mcvs.gain, mcvs.absdiffper,
                 mcday.gain, mcday.absdiffper,
-                (int)vol10.ldays, (int)vol10.pdays, price);
+                (int)vol10.ldays, (int)vol10.pdays, price, cap/1000000);
 
         if (mclong.gain < mcshort.gain &&
             /* Tothemoon: stocks that performed poorly in the past, but
@@ -2703,8 +2723,8 @@ void *scanStocksThread(void *arg) {
             dbAddStockToList(listname, symbol);
             showstats=1;
         } else if (
-            /* Stocks with a long history of good results that are doing
-             * even better now. */
+            /* Big cap stocks with a long history of good results that
+             * are doing even better now. */
             mcvl.gain < mclong.gain &&      /* Getting better in the long. */
             mclong.gain < mcshort.gain &&   /* Getting better in the short .*/
             mcshort.gain < mcvs.gain &&     /* Getting even better now. */
@@ -2713,7 +2733,7 @@ void *scanStocksThread(void *arg) {
             mcshort.gain > 3 &&             /* Good in the short. */
             mcvs.gain > 4 &&                /* Outstanding in the short. */
             mcday.gain > 1 &&               /* Doing well right now. */
-            price > 45)                     /* No penny stocks. */
+            cap > 10000000000)              /* Big cap stocks only. */
         {
             printf("evenbetter: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("evenbetter", symbol);
@@ -2764,7 +2784,7 @@ void *cvThread(void *arg) {
     DbHandle = dbInit(0);
     UNUSED(arg);
     while(1) {
-        ydata *yd = getYahooData(YDATA_QUOTE,"EURUSD=X",NULL,NULL);
+        ydata *yd = getYahooData(YDATA_QUOTE,"EURUSD=X",NULL,NULL,0);
         if (yd) EURUSD = yd->reg;
         freeYahooData(yd);
         sleep(10);
@@ -2804,7 +2824,7 @@ sds genBigMoversMessage(int count) {
     bmStock *stocks = NULL;
     while(sqlNextRow(&row)) {
         const char *sym = row.col[0].s;
-        ydata *yd = getYahooData(YDATA_QUOTE,sym,NULL,NULL);
+        ydata *yd = getYahooData(YDATA_QUOTE,sym,NULL,NULL,60*5);
         if (yd) {
             /* Limit the list to important companies (total capitalization
              * greater or equal to 10B. */
@@ -2867,7 +2887,7 @@ void *bigMoversThread(void *arg) {
 
         /* Get a reference stock, just in order to check the
          * time at which the last price was available.*/
-        ydata *yd = getYahooData(YDATA_QUOTE,"AAPL",NULL,NULL);
+        ydata *yd = getYahooData(YDATA_QUOTE,"AAPL",NULL,NULL,0);
         if (yd == NULL) continue;
 
         /* The algorithm works like this: we want to output the
@@ -2896,7 +2916,7 @@ void *bigMoversThread(void *arg) {
 
         /* Check if the delta is now approaching zero or diverging
          * from zero. */
-        if (DebugMode)
+        if (DebugMode >= 2)
             printf("Bigmovers: D: %d, LD: %d\n", (int) delta, (int) lastdelta);
         time_t alpha = 60*16; /* We select a big enough limit the two deltas
                                  should be in/out. This is useful because for
@@ -3042,6 +3062,8 @@ int main(int argc, char **argv) {
             VerboseMode = 1;
         } else if (!strcmp(argv[j],"--cache")) {
             CacheYahoo = 1;
+        } else if (!strcmp(argv[j],"--noevict")) {
+            NoEvictMode = 1;
         } else if (!strcmp(argv[j],"--apikey") && morearg) {
             BotApiKey = sdsnew(argv[++j]);
         } else if (!strcmp(argv[j],"--dbfile") && morearg) {
@@ -3055,7 +3077,7 @@ int main(int argc, char **argv) {
             printf(
             "Usage: %s [--apikey <apikey>] [--debug] [--verbose] "
             "[--noautolists] [--dbfile <filename>] [--scanpause <usec>] "
-            "[--cache]"
+            "[--cache] [--noevict]"
             "\n",argv[0]);
             exit(1);
         }
