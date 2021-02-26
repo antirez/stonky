@@ -2490,21 +2490,21 @@ void botUpdateActiveChannels(int64_t id) {
     ActiveChannelsCount++;
 }
 
-/* This function helps make the various json paths
- * which are needed when querying the json payload from telegram.
+/* This function helps set the various json paths
+ * which are used when querying the json payload from telegram.
  * Its mostly a thin wrapper to make the string management clean 
  * and simple while setting the json paths.
  * 
  * Its like sdscatprintf, but it resets the sds every time, so it
  * does not concatenate, but instead clears the sds each time.
  * */
-sds makeJsonPath(sds s, char *fmt, ...) {
+sds setJsonPath(sds *s, char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    sdsclear(s);
-    sds rv =  sdscatvprintf(s, fmt, ap);
+    sdsclear(*s);
+    *s =  sdscatvprintf(*s, fmt, ap);
     va_end(ap);
-    return rv;
+    return *s;
 }
 
 /* Get the updates from the Telegram API, process them, and return the
@@ -2544,23 +2544,19 @@ int64_t botProcessUpdates(int64_t offset, int timeout) {
         if (cJSON_Select(update, TGRAM_CM) == NULL) {
             msg_fieldname = TGRAM_DM;
         }
-        json_path = makeJsonPath(json_path, "%s.chat.id:n", msg_fieldname);
-        cJSON *chatid = cJSON_Select(update,json_path);
+        cJSON *chatid = cJSON_Select(update,setJsonPath(&json_path, "%s.chat.id:n", msg_fieldname));
         if (chatid == NULL) continue;
         int64_t target = (int64_t) chatid->valuedouble;
-        json_path = makeJsonPath(json_path, "%s.chat.type:s", msg_fieldname);
-        cJSON *chattype = cJSON_Select(update,json_path);
+        cJSON *chattype = cJSON_Select(update,setJsonPath(&json_path, "%s.chat.type:s", msg_fieldname));
         if (chattype != NULL) {
             if (!strcasecmp(chattype->valuestring,"group")) {
                 botUpdateActiveChannels(target);
             }
         }
-        json_path = makeJsonPath(json_path, "%s.date:n", msg_fieldname);
-        cJSON *date = cJSON_Select(update,json_path);
+        cJSON *date = cJSON_Select(update,setJsonPath(&json_path, "%s.date:n", msg_fieldname));
         if (date == NULL) continue;
         time_t timestamp = date->valuedouble;
-        json_path = makeJsonPath(json_path, "%s.text:s", msg_fieldname);
-        cJSON *text = cJSON_Select(update,json_path);
+        cJSON *text = cJSON_Select(update,setJsonPath(&json_path, "%s.text:s", msg_fieldname));
         if (text == NULL) continue;
         if (VerboseMode) printf("%s.text: %s\n", msg_fieldname, text->valuestring);
 
