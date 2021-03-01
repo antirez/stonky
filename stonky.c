@@ -1955,13 +1955,31 @@ cleanup:
 
 /* Parse a string in the format <quantity> or <quantity>@<price> for
  * stock selling / buying subcommands. Populate the parameters by
- * reference. */
-void parseQuantityAndPrice(const char *str, int64_t *quantity, double *price) {
+ * reference.
+ *
+ * If 'curprice' is not zero, quantity can also be an amount of money,
+ * specified appending "$", * like in 100000$. In this case the function
+ * will compute the amount of stocks you can purhcase using the specified
+ * amount of money. */
+void parseQuantityAndPrice(const char *str, int64_t *quantity, double *price, double curprice) {
     /* Parse the quantity@price argument if available. */
     sds copy = sdsnew(str);
     char *p = strchr(copy,'@');
-    if (p) *price = strtod(p+1,NULL);
-    *quantity = strtoll(copy,NULL,10);
+    if (p) {
+        *price = strtod(p+1,NULL);
+        curprice = *price;
+    } else {
+        p = copy+sdslen(copy); /* Make p always point at char next of
+                                  quantity, that is '@' or the null term
+                                  if no price was specified. */
+    }
+    if (curprice && *(p-1)  == '$') {
+        *(p-1) = 0;
+        int64_t money = strtoll(copy,NULL,10);
+        *quantity = money/curprice;
+    } else {
+        *quantity = strtoll(copy,NULL,10);
+    }
     sdsfree(copy);
 }
 
@@ -2018,8 +2036,6 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
         double price = 0;
         sds symbol = argv[2];
 
-        if (argc == 4) parseQuantityAndPrice(argv[3],&quantity,&price);
-
         /* Check that the symbol exists. */
         ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL,3600);
         if (yd == NULL) {
@@ -2027,6 +2043,9 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
                 "Stock symbol %s not found.", symbol);
             goto fmterr;
         }
+
+        if (argc == 4)
+            parseQuantityAndPrice(argv[3],&quantity,&price,yd->reg);
         if (price == 0) price = yd->reg;
         freeYahooData(yd);
 
@@ -2056,7 +2075,7 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
         double sellprice = 0;
 
         /* Parse the quantity@price argument if available. */
-        if (argc == 4) parseQuantityAndPrice(argv[3],&quantity,&sellprice);
+        if (argc == 4) parseQuantityAndPrice(argv[3],&quantity,&sellprice,0);
 
         /* Check that the symbol exists. */
         ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL,3600);
@@ -2471,6 +2490,7 @@ void *botHandleRequest(void *arg) {
 "$mylist: buy AAPL 10@50  | Add 10 AAPL stocks at 50$ each.\n"
 "$mylist: buy AAPL 20     | Add 20 AAPL stocks at current price.\n"
 "$mylist: buy AAPL        | Add 1 AAPL stocks at current price.\n"
+"$mylist: buy AAPL 10000$ | Add AAPL stocks you can buy with 10k$.\n"
 "$mylist: sell AAPL 10@35 | Sell 10 AAPL stocks at 35$ each.\n"
 "$mylist: sell AAPL 10    | Sell 10 AAPL stocks at current price.\n"
 "$mylist: sell AAPL       | Sell all AAPL stocks at current price.\n"
