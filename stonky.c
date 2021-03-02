@@ -749,6 +749,14 @@ typedef struct ydata {
     float *ts_data;     /* Samples. */
     float ts_min;       /* Min sample value. */
     float ts_max;       /* Max sample value. */
+    /* === Data converted by yahooDataToPriceChanges() === */
+    int ts_clen;    /* Number of converted samples. */
+    int64_t pdays;  /* Days with a profit. */
+    int64_t ldays;  /* Days with a loss. */
+    double avgp;    /* Average profit of days with a profit. */
+    double avgl;    /* Average loss of days with a loss. */
+    double maxp;    /* Max profit in a day. */
+    double maxl;    /* Max loss in a day. */
 } ydata;
 
 /* Free the ydata result structure. */
@@ -943,6 +951,60 @@ fmterr:
     cJSON_Delete(json);
     freeYahooData(yd);
     return NULL;
+}
+
+/* Turns a yahoo data time series result, obtained using getYahooData with
+ * the YDATA_TS argument, and turn the prices of the last 'range+1' days
+ * in the corresponding 'range' price percentage changes.
+ *
+ * While doing so, compute some volatility statistics. It uses a different
+ * approach compared to the classical one, by checking what is the average
+ * percentage the stock gains, when it gains, loses, with it loses, and
+ * also taking into account what is the maximum loss and gain in percentage
+ * on the specified last "range" days of trading.
+ *
+ * The final results are stored in the additinal fields of the 'yd'
+ * structure. The price changes replace the ts_data array itself.
+ */
+void yahooDataToPriceChanges(ydata *yd, int range) {
+    if (range >= yd->ts_len) range = yd->ts_len-1;
+    if (range <= 0) return;
+
+    /* Intialize the result set. */
+    yd->pdays = 0;
+    yd->ldays = 0;
+    yd->avgp = 0;
+    yd->avgl = 0;
+    yd->maxp = 0;
+    yd->maxl = 0;
+
+    double pval = 0; /* Previous sample value. */
+    /* Analyze from the first to the last day in the range. */
+    for (int j = range; j >= 0; j--) {
+        double val = yd->ts_data[yd->ts_len-j-1];
+        if (j == range) { /* First iteration. */
+            pval = val;
+            continue;
+        }
+
+        /* Compute the PL percentage between the previous and current
+         * day of trading. */
+        double pl = ((val/pval)-1)*100;
+        yd->ts_data[yd->ts_len-j-1] = pl;
+        if (pl > 0) {
+            yd->pdays++;
+            yd->avgp += pl;
+            if (pl > yd->maxp) yd->maxp = pl;
+        } else {
+            yd->ldays++;
+            yd->avgl += pl;
+            if (pl < yd->maxl) yd->maxl = pl;
+        }
+        pval = val;
+    }
+    if (yd->pdays) yd->avgp /= yd->pdays;
+    if (yd->ldays) yd->avgl /= yd->ldays;
+    yd->ts_clen = range;
 }
 
 /* =============================================================================
@@ -1563,59 +1625,6 @@ void computeMontecarlo(ydata *yd, int range, int count, int period, mcres *mc) {
     xfree(gains);
 }
 
-/* Structure used by computeVolatility() to return the results. */
-typedef struct {
-    int64_t pdays;  /* Days with a profit. */
-    int64_t ldays;  /* Days with a loss. */
-    double avgp;    /* Average profit of days with a profit. */
-    double avgl;    /* Average loss of days with a loss. */
-    double maxp;    /* Max profit in a day. */
-    double maxl;    /* Max loss in a day. */
-} volres;
-
-/* This function computes some volatility statistics. It uses a different
- * approach compared to the classical one, by checking what is the average
- * percentage the stock gains, when it gains, loses, with it loses, and
- * also taking into account what is the maximum loss and gain in percentage
- * on the specified last "range" days of trading. */
-void computeVolatility(ydata *yd, int range, volres *vr) {
-    if (range > yd->ts_len) range = yd->ts_len;
-    double pval = 0; /* Previous sample value. */
-
-    /* Intialize the result set. */
-    vr->pdays = 0;
-    vr->ldays = 0;
-    vr->avgp = 0;
-    vr->avgl = 0;
-    vr->maxp = 0;
-    vr->maxl = 0;
-
-    /* Analyze from the first to the last day in the range. */
-    for (int j = range-1; j >= 0; j--) {
-        double val = yd->ts_data[yd->ts_len-j-1];
-        if (pval == 0) {
-            pval = val;
-            continue;
-        }
-
-        /* Compute the PL percentage between the previous and current
-         * day of trading. */
-        double pl = ((val/pval)-1)*100;
-        if (pl > 0) {
-            vr->pdays++;
-            vr->avgp += pl;
-            if (pl > vr->maxp) vr->maxp = pl;
-        } else {
-            vr->ldays++;
-            vr->avgl += pl;
-            if (pl < vr->maxl) vr->maxl = pl;
-        }
-        pval = val;
-    }
-    if (vr->pdays) vr->avgp /= vr->pdays;
-    if (vr->ldays) vr->avgl /= vr->ldays;
-}
-
 /* =============================================================================
  * Bot commands implementations
  * ===========================================================================*/
@@ -1893,9 +1902,9 @@ void botHandleVolatilityRequest(botRequest *br, sds symbol, sds *argv, int argc)
         goto cleanup;
     }
 
-    volres vr;
-    computeVolatility(yd,range,&vr);
-    long totdays = vr.pdays + vr.ldays;
+    yahooDataToPriceChanges(yd,range);
+    range = yd->ts_clen;
+    long totdays = yd->pdays + yd->ldays;
     reply = sdscatprintf(reply,
         "%s volatility report:\n"
         "```\n"
@@ -1908,9 +1917,46 @@ void botHandleVolatilityRequest(botRequest *br, sds symbol, sds *argv, int argc)
         "```\n"
         "Data from last %d days (adjusted) range.",
         symbol,
-        (long)vr.pdays, (double)vr.pdays/totdays*100,
-        (long)vr.ldays, (double)vr.ldays/totdays*100,
-        vr.avgp, vr.avgl, vr.maxp, vr.maxl, range);
+        (long)yd->pdays, (double)yd->pdays/totdays*100,
+        (long)yd->ldays, (double)yd->ldays/totdays*100,
+        yd->avgp, yd->avgl, yd->maxp, yd->maxl, range);
+
+cleanup:
+    if (reply) botSendMessage(br->target,reply,0);
+    freeYahooData(yd);
+    sdsfree(reply);
+}
+
+/* Reply to $AAPL last [count]. The reply to this request is a set of
+ * percentage of price changes for the stock in the last N days. The
+ * default range is 10 days (two weeks worth of trading). */
+void botHandleLastChangesRequest(botRequest *br, sds symbol, sds *argv, int argc) {
+    int range = 10;
+    sds reply = NULL;
+    ydata *yd = NULL;
+
+    /* Check if a range option was given. */
+    if (argc == 1) {
+        range = atoi(argv[0]);
+        if (range <= 0) range = 10;
+    }
+
+    /* Get the data and convert it to changes. */
+    yd = getYahooData(YDATA_TS,symbol,"1y","1d",3600);
+    if (yd == NULL) {
+        reply = sdscatprintf(reply, "No such stock '%s'.", symbol);
+        goto cleanup;
+    }
+    yahooDataToPriceChanges(yd,range);
+    range = yd->ts_clen; /* Trim the range if there was not enough data. */
+
+    /* Build a simple reply. */
+    reply = sdscatprintf(sdsempty(),
+        "%s last %d market days price changes: ", symbol, range);
+    for (int j = range; j > 0; j--) {
+        double change = yd->ts_data[yd->ts_len-j];
+        reply = sdscatprintf(reply,"%s%.2f%% ", change > 0 ? "+" : "", change);
+    }
 
 cleanup:
     if (reply) botSendMessage(br->target,reply,0);
@@ -2467,6 +2513,9 @@ void *botHandleRequest(void *arg) {
     {
         /* $AAPL vol | volatility [options] */
         botHandleVolatilityRequest(br,argv[0],argv+2,argc-2);
+    } else if (argc >= 2 && !strcasecmp(argv[1],"last")) {
+        /* $AAPL last [count] */
+        botHandleLastChangesRequest(br,argv[0],argv+2,argc-2);
     } else if (argc == 2 && !strcasecmp(argv[1],"trend")) {
         /* $AAPL trend. */
         botHandleTrendRequest(br,argv[0]);
@@ -2693,13 +2742,14 @@ void *scanStocksThread(void *arg) {
         /* Compute Montecarlo two times, for the last year, and for
          * the last two months, detecting big changes. */
         mcres mcvl, mclong, mcshort, mcvs, mcday;
-        volres vol10;
         computeMontecarlo(yd,253*5,1000,5,&mcvl);   /* 5y */
         computeMontecarlo(yd,253,1000,5,&mclong);   /* 1y */
         computeMontecarlo(yd,60,1000,5,&mcshort);   /* 3m */
         computeMontecarlo(yd,20,1000,5,&mcvs);      /* 1m */
         computeMontecarlo(yd,10,1000,1,&mcday);     /* 15d */
-        computeVolatility(yd,10,&vol10);
+        yahooDataToPriceChanges(yd,10);
+        int vol10_ldays = yd->ldays;
+        int vol10_pdays = yd->pdays;
         freeYahooData(yd);
 
         /* Now get the price info and cache what we plan to use. */
@@ -2722,7 +2772,7 @@ void *scanStocksThread(void *arg) {
                 mcshort.gain, mcshort.absdiffper,
                 mcvs.gain, mcvs.absdiffper,
                 mcday.gain, mcday.absdiffper,
-                (int)vol10.ldays, (int)vol10.pdays, price, cap/1000000);
+                vol10_ldays, vol10_pdays, price, cap/1000000);
 
         if (mclong.gain < mcshort.gain &&
             /* Tothemoon: stocks that performed poorly in the past, but
@@ -2753,7 +2803,7 @@ void *scanStocksThread(void *arg) {
             mcshort.gain > 3 &&             /* Good in the short. */
             mcvs.gain > 4 &&                /* Outstanding in the short. */
             mcday.gain > 1 &&               /* Doing well right now. */
-            cap > 10000000000)              /* Big cap stocks only. */
+            cap > 3000000000)              /* Mid/Big cap stocks only. */
         {
             printf("evenbetter: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("evenbetter", symbol);
@@ -2765,7 +2815,7 @@ void *scanStocksThread(void *arg) {
             mclong.gain > 0.5 &&
             mcshort.gain > 3 &&
             mcvs.gain > 3 &&
-            vol10.ldays == 0 && vol10.pdays > 0 &&
+            vol10_ldays == 0 && vol10_pdays > 0 &&
             price > 10)
         {
             printf("unstoppable: %d/%d %s\n",j,NumSymbols,symbol);
