@@ -1964,7 +1964,7 @@ void botHandleLastChangesRequest(botRequest *br, sds symbol, sds *argv, int argc
     for (int j = range; j > 0; j--) {
         double change = yd->ts_data[yd->ts_len-j];
         const char *emoji = priceChangeToEmoji(change);
-        reply = sdscatprintf(reply,"%s%s%.2f%% | ",
+        reply = sdscatprintf(reply,"%s %s%.2f%% | ",
             emoji,
             change > 0 ? "+" : "",
             change);
