@@ -249,6 +249,20 @@ int strmatch(const char *pattern, int patternLen,
     return 0;
 }
 
+/* Given a stock price change, return an appropriate (LOL) emoji to
+ * visually represent such change. The returned string is statically
+ * allocated so the function is thread safe. */
+const char *priceChangeToEmoji(double change) {
+    int emoidx = 0;
+    static const char *emoset[] = {"⚰️","🔴","🟢","🚀"};
+    /* Note: ordering of the followign if statements is important. */
+    if (change < 0) emoidx = 1;
+    if (change < -8) emoidx = 0;
+    if (change >= 0) emoidx = 2;
+    if (change > 8) emoidx = 3;
+    return emoset[emoidx];
+}
+
 /* ============================================================================
  * JSON selector implementation: cJSON is a bit too raw...
  * ==========================================================================*/
@@ -1646,18 +1660,12 @@ sds sdsCatPriceRequest(sds s, sds symbol, ydata *yd, int flags) {
 
     /* Select the emoji according to the price change. */
     double change = strtod(yd->regchange,NULL);
-    int emoidx = 0;
-    char *emoset[] = {"⚰️","🔴","🟢","🚀"};
-    /* Note: ordering of the followign if statements is important. */
-    if (change < 0) emoidx = 1;
-    if (change < -8) emoidx = 0;
-    if (change >= 0) emoidx = 2;
-    if (change > 8) emoidx = 3;
+    const char *emoji = priceChangeToEmoji(change);
 
     if (flags & STONKY_VERY_SHORT) {
         s = sdscatprintf(s,
             "%s[%s](https://google.com/search?q=%s+stock) %s%s",
-            emoset[emoidx],
+            emoji,
             yd->symbol,
             yd->symbol,
             (yd->regchange && yd->regchange[0] == '-') ? "" : "+",
@@ -1665,7 +1673,7 @@ sds sdsCatPriceRequest(sds s, sds symbol, ydata *yd, int flags) {
     } else if (flags & STONKY_SHORT) {
         s = sdscatprintf(s,
             "%s[%s](https://google.com/search?q=%s+stock): %.02f%s (%s%s)",
-            emoset[emoidx],
+            emoji,
             yd->symbol,
             yd->symbol,
             yd->reg,
@@ -1676,7 +1684,7 @@ sds sdsCatPriceRequest(sds s, sds symbol, ydata *yd, int flags) {
         s = sdscatprintf(s,
             "%s%s ([%s](https://google.com/search?q=%s+stock)) "
             "price is %.02f%s (%s%s)",
-            emoset[emoidx],
+            emoji,
             yd->name,
             yd->symbol,
             yd->symbol,
@@ -1952,11 +1960,16 @@ void botHandleLastChangesRequest(botRequest *br, sds symbol, sds *argv, int argc
 
     /* Build a simple reply. */
     reply = sdscatprintf(sdsempty(),
-        "%s last %d market days price changes: ", symbol, range);
+        "%s last %d market days price changes:\n", symbol, range);
     for (int j = range; j > 0; j--) {
         double change = yd->ts_data[yd->ts_len-j];
-        reply = sdscatprintf(reply,"%s%.2f%% ", change > 0 ? "+" : "", change);
+        const char *emoji = priceChangeToEmoji(change);
+        reply = sdscatprintf(reply,"%s%s%.2f%% | ",
+            emoji,
+            change > 0 ? "+" : "",
+            change);
     }
+    reply = sdstrim(reply," |");
 
 cleanup:
     if (reply) botSendMessage(br->target,reply,0);
