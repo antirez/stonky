@@ -2533,6 +2533,7 @@ void *botHandleRequest(void *arg) {
 "$AAPL mc range 60        | Specify Montecarlo range.\n"
 "$APPL mc period 5        | Specify Sell/Buy fixed period.\n"
 "$APPL trend              | Montecarlo trend analysis.\n"
+"$AAPL last [numdays]     | Last N price %% changes (default 10).\n"
 "$AAPL vol                | Volatility analysis.\n"
 "$AAPL vol range 60       | Volatility anal. last 60 market days.\n"
 "$bigmovers               | Best and worse of today.\n"
