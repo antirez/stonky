@@ -2797,11 +2797,12 @@ void *scanStocksThread(void *arg) {
              *
              * The idea is to find new trends and stocks that are resurrecting
              * for some reason. Many will be penny stocks. */
-            mcshort.gain <  mcvs.gain && /* Are getting better. */
-            mcvs.gain > 8 &&             /* Very high gains recently. */
             mclong.gain < 3 &&           /* Not too strong historically. */
-            mcday.gain > 1 &&            /* High gains in few last days. */
-            mcday.absdiffper < 100)      /* Consistency in few last days. */
+            mcshort.gain <  mcvs.gain && /* Are getting better. */
+            mcshort.gain > 3 &&          /* Very high gains recently. */
+            mcvs.gain > 8 &&             /* Very high gains recently. */
+            mcday.gain > 1 &&            /* High daily gains last month. */
+            mcshort.absdiff < 8)         /* Some consistency. */
         {
             char *listname = price < 15 ? "penny" : "tothemoon";
             printf("%s: %d/%d %s\n",listname,j,NumSymbols,symbol);
