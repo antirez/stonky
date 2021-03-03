@@ -3019,6 +3019,13 @@ void *bigMoversThread(void *arg) {
         {
             /* Markets opening or closing detected. We can broadcast. */
             if (VerboseMode) printf("Bigmovers: open/close detected.\n");
+
+            /* Wait some time before going forward: sometimes AAPL is
+             * already updated after the markets open, but other symbols
+             * are still in premarket state. */
+            sleep(120);
+
+            /* Finally send the message to all the active channels. */
             broadcastBigMovers();
 
             /* Don't spam again for a while. */
