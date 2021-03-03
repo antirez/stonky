@@ -2446,7 +2446,8 @@ void *botHandleRequest(void *arg) {
             botHandleLsRequest(br);
         } else if (argc == 3 &&
                    AdminPass != NULL &&
-                   !strcasecmp(argv[1],"quit") &&
+                   (!strcasecmp(argv[1],"quit") ||
+                    !strcasecmp(argv[1],"exit")) &&
                    !strcasecmp(argv[2],AdminPass))
         {
             /* $$ quit <password> */
