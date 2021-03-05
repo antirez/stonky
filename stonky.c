@@ -3184,11 +3184,21 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[j],"--scanpause") && morearg) {
             ScanPause = atoi(argv[++j]);
             if (ScanPause < 0) ScanPause = 0;
+        } else if (!strcmp(argv[j],"--refresh")) {
+            /* This is just an alias for
+             * --cache --noevict --scanpause 0 --verbose
+             * And is useful in order to scan the local DB of stocks
+             * and apply a modified algorithm for the autolists
+             * tothemoon:, evenbetter:, penny:, ... */
+            ScanPause = 0;
+            CacheYahoo = 1;
+            NoEvictMode = 1;
+            VerboseMode = 1;
         } else {
             printf(
             "Usage: %s [--apikey <apikey>] [--debug] [--verbose] "
             "[--noautolists] [--dbfile <filename>] [--scanpause <usec>] "
-            "[--cache] [--noevict]"
+            "[--cache] [--noevict] [--refresh]"
             "\n",argv[0]);
             exit(1);
         }
