@@ -17,6 +17,12 @@ By default the bot will create an SQLite database in the working directory.
 If you want to specify another path for your SQLite db, use the `--dbfile`
 command line option.
 
+## Building on Raspberry Pi
+
+The above steps should work, but you may also need this before compiling:
+
+    apt install libatomic-ops-dev
+
 ## Usage
 
 To use the bot, send messages in a Telegram channel where the bot is an
