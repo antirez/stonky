@@ -2805,7 +2805,8 @@ void *scanStocksThread(void *arg) {
             mcshort.absdiff < 8)         /* Some consistency. */
         {
             char *listname = price < 15 ? "penny" : "tothemoon";
-            printf("%s: %d/%d %s\n",listname,j,NumSymbols,symbol);
+            if (VerboseMode)
+                printf("%s: %d/%d %s\n",listname,j,NumSymbols,symbol);
             dbAddStockToList(listname, symbol);
             showstats=1;
         } else if (
@@ -2821,7 +2822,8 @@ void *scanStocksThread(void *arg) {
             mcday.gain > 1 &&               /* Doing well right now. */
             cap > 3000000000)              /* Mid/Big cap stocks only. */
         {
-            printf("evenbetter: %d/%d %s\n",j,NumSymbols,symbol);
+            if (VerboseMode)
+                printf("evenbetter: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("evenbetter", symbol);
             showstats=1;
         } else if (
@@ -2834,7 +2836,8 @@ void *scanStocksThread(void *arg) {
             vol10_ldays == 0 && vol10_pdays > 0 &&
             price > 10)
         {
-            printf("unstoppable: %d/%d %s\n",j,NumSymbols,symbol);
+            if (VerboseMode)
+                printf("unstoppable: %d/%d %s\n",j,NumSymbols,symbol);
             dbAddStockToList("unstoppable", symbol);
             showstats=1;
         } else {
@@ -2844,7 +2847,7 @@ void *scanStocksThread(void *arg) {
             dbDelStockFromList("unstoppable", symbol, 0);
         }
 
-        if (showstats) {
+        if (showstats && VerboseMode) {
             printf("%d/%d %s:\n"
                    "L  %f (+-%f %f%%) [%f/%f] ->\n"
                    "S  %f (+-%f %f%%) [%f/%f] ->\n"
