@@ -979,6 +979,9 @@ fmterr:
  *
  * The final results are stored in the additinal fields of the 'yd'
  * structure. The price changes replace the ts_data array itself.
+ *
+ * When broken data is detected and the calculation is impossible, the
+ * corresponding value is set to -inf.
  */
 void yahooDataToPriceChanges(ydata *yd, int range) {
     if (range >= yd->ts_len) range = yd->ts_len-1;
@@ -999,6 +1002,14 @@ void yahooDataToPriceChanges(ydata *yd, int range) {
         if (j == range) { /* First iteration. */
             pval = val;
             continue;
+        } else {
+            /* Handle broken data: the Yahoo API returns zero samples for
+             * certain data points of less known stocks. */
+            if (val == 0 || pval == 0) {
+                if (val != 0) pval = val;
+                yd->ts_data[yd->ts_len-j-1] = -1.0/0;
+                continue;
+            }
         }
 
         /* Compute the PL percentage between the previous and current
@@ -1964,6 +1975,10 @@ void botHandleLastChangesRequest(botRequest *br, sds symbol, sds *argv, int argc
     for (int j = range; j > 0; j--) {
         double change = yd->ts_data[yd->ts_len-j];
         const char *emoji = priceChangeToEmoji(change);
+        if (isinf(change)) {
+            reply = sdscat(reply,"☠️ | ");
+            continue;
+        }
         reply = sdscatprintf(reply,"%s %s%.2f%% | ",
             emoji,
             change > 0 ? "+" : "",
