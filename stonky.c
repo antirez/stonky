@@ -1796,7 +1796,9 @@ void botHandleInfoRequest(botRequest *br, sds symbol) {
             "_%s_\n\n"
             "last dividend %% of current price: %.2f%% / year\n"
             "next dividend ex-date: %s\n"
-            ,yd->name, yd->industry, summary,
+            ,yd->name,
+            yd->industry ? yd->industry : "unknown industry",
+            summary,
             yd->lastdiv/yd->reg*100*4,
             exdivdate);
         sdsfree(summary);
