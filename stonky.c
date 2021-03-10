@@ -2626,7 +2626,8 @@ void *botHandleRequest(void *arg) {
         botSendMessage(br->target,
 "```\n"
 "$AAPL                    | Show price for AAPL.\n"
-"$AAPL 1d|5d|1m|6m|1y|5y  | Show AAPL price chart for period\n"
+"$AAPL 1d|5d|1m|6m|1y|5y  | Show AAPL price chart for period.\n"
+"$AAPL info               | Show general info for the company.\n"
 "$mylist: +VMW +AAPL -KO  | Modify the list.\n"
 "$mylist:                 | Ask prices of whole list.\n"
 "$mylist::                | Like $mylist: but more verbose.\n"
