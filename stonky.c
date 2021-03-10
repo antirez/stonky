@@ -739,9 +739,10 @@ sds makeBotRequest(const char *action, int *resptr, char **optlist, int numopt)
 
 #define YDATA_QUOTE 0       /* Quote data. */
 #define YDATA_TS 1          /* Historical time series data. */
+#define YDATA_INFO 2        /* Company general information. */
 typedef struct ydata {
     int type;       /* YDATA_QUOTE or YDATA_TS. */
-    /* === Data filled for quote query type === */
+    /* === Data filled for YDATA_QUOTE === */
     sds symbol;     /* Company stock symbol (also available for TS queries). */
     sds name;       /* Company name. */
     float pre;      /* Pre market price or zero. */
@@ -758,7 +759,7 @@ typedef struct ydata {
     sds exchange;   /* Exchange name. */
     int delay;      /* Data source delay. */
     sds csym;       /* Currency symbol. */
-    /* === Data filled for time series queries === */
+    /* === Data filled for YDATA_TS === */
     int ts_len;         /* Number of samples. */
     float *ts_data;     /* Samples. */
     float ts_min;       /* Min sample value. */
@@ -771,6 +772,13 @@ typedef struct ydata {
     double avgl;    /* Average loss of days with a loss. */
     double maxp;    /* Max profit in a day. */
     double maxl;    /* Max loss in a day. */
+    /* === Data filled for YDATA_INFO === */
+    sds summary;    /* Business description. */
+    sds country;    /* Business country. */
+    sds industry;   /* Business industry. */
+    int employees;  /* Number of employees. */
+    double lastdiv; /* Last dividend value per share. */
+    sds exdivdate;  /* Next ex-dividend date. */
 } ydata;
 
 /* Free the ydata result structure. */
@@ -783,6 +791,10 @@ void freeYahooData(ydata *y) {
     sdsfree(y->regchange);
     sdsfree(y->csym);
     sdsfree(y->exchange);
+    sdsfree(y->summary);
+    sdsfree(y->country);
+    sdsfree(y->industry);
+    sdsfree(y->exdivdate);
     free(y->ts_data);
     free(y);
 }
@@ -831,11 +843,15 @@ ydata *getYahooData(int type, const char *symbol, const char *range, const char 
         url = sdscat(url,symbol);
         url = sdscatprintf(url,"?range=%s&interval=%s&includePrePost=false",
                            range,interval);
-    } else if (type == YDATA_QUOTE) {
+    } else if (type == YDATA_QUOTE || type == YDATA_INFO) {
         url = sdsnew(apihost);
         url = sdscat(url,"/v10/finance/quoteSummary/");
         url = sdscat(url,symbol);
-        url = sdscat(url,"?modules=price");
+        if (type == YDATA_QUOTE)
+            url = sdscat(url,"?modules=price");
+        else
+            url = sdscat(url,"?modules=assetProfile%2CdefaultKeyStatistics"
+                             "%2CcalendarEvents%2Cprice");
     } else {
         return NULL;
     }
@@ -885,7 +901,7 @@ ydata *getYahooData(int type, const char *symbol, const char *range, const char 
     cJSON *json = cJSON_Parse(body);
     sdsfree(body);
 
-    if (type == YDATA_QUOTE) {
+    if (type == YDATA_QUOTE || type == YDATA_INFO) {
         cJSON *price = cJSON_Select(json,".quoteSummary.result[0].price");
         cJSON *aux;
         if (price == NULL) goto fmterr;
@@ -922,6 +938,28 @@ ydata *getYahooData(int type, const char *symbol, const char *range, const char 
         /* Certain times tha Yahoo API is unable to return actual info
          * from a stock, even if it returns success. */
         if (yd->regchange == NULL) goto fmterr;
+
+        /* Fill the optional stuff we'll find only if TS_INFO was
+         * requested. */
+        cJSON *ap = cJSON_Select(json,".quoteSummary.result[0].assetProfile");
+        if (ap) {
+            if ((aux = cJSON_Select(ap,".longBusinessSummary")) != NULL)
+                yd->summary = sdsnew(aux->valuestring);
+            if ((aux = cJSON_Select(ap,".country")) != NULL)
+                yd->country = sdsnew(aux->valuestring);
+            if ((aux = cJSON_Select(ap,".industry")) != NULL)
+                yd->industry = sdsnew(aux->valuestring);
+            if ((aux = cJSON_Select(ap,".fullTimeEmployees")) != NULL)
+                yd->employees = aux->valuedouble;
+        }
+
+        aux = cJSON_Select(json,
+            ".quoteSummary.result[0].defaultKeyStatistics.lastDividendValue.raw");
+        if (aux) yd->lastdiv = aux->valuedouble;
+
+        aux = cJSON_Select(json,
+            ".quoteSummary.result[0].calendarEvents.exDividendDate.fmt");
+        if (aux) yd->exdivdate = sdsnew(aux->valuestring);
     } else {
         cJSON *meta = cJSON_Select(json,".chart.result[0].meta");
         cJSON *aux;
@@ -1731,6 +1769,38 @@ sds sdsCatPriceRequest(sds s, sds symbol, ydata *yd, int flags) {
 void botHandlePriceRequest(botRequest *br, sds symbol) {
     ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL,15);
     sds reply = sdsCatPriceRequest(sdsempty(),symbol,yd,0);
+    freeYahooData(yd);
+    botSendMessage(br->target,reply,0);
+    sdsfree(reply);
+}
+
+/* Handle bot info requests in the form: $AAPL info. */
+void botHandleInfoRequest(botRequest *br, sds symbol) {
+    ydata *yd = getYahooData(YDATA_INFO,symbol,NULL,NULL,3600);
+    sds reply = NULL;
+    if (yd == NULL) {
+        reply = sdscatprintf(sdsempty(),
+            "Stock symbol %s not found.", symbol);
+    } else {
+        unsigned int maxsum = 350;
+        sds summary = yd->summary ? sdsdup(yd->summary) : sdsnew("No summary.");
+        if (sdslen(summary) > maxsum) {
+            sdsrange(summary,0,maxsum-1);
+            sdscat(summary,"...");
+        }
+        char *exdivdate = yd->exdivdate;
+        if (exdivdate == NULL || strlen(exdivdate) == 0)
+            exdivdate = "No date for next dividend.";
+        reply = sdscatprintf(sdsempty(),
+            "*%s* (%s)\n\n"
+            "_%s_\n\n"
+            "last dividend %% of current price: %.2f%% / year\n"
+            "next dividend ex-date: %s\n"
+            ,yd->name, yd->industry, summary,
+            yd->lastdiv/yd->reg*100*4,
+            exdivdate);
+        sdsfree(summary);
+    }
     freeYahooData(yd);
     botSendMessage(br->target,reply,0);
     sdsfree(reply);
@@ -2548,6 +2618,9 @@ void *botHandleRequest(void *arg) {
     } else if (argc == 2 && !strcasecmp(argv[1],"trend")) {
         /* $AAPL trend. */
         botHandleTrendRequest(br,argv[0]);
+    } else if (argc == 2 && !strcasecmp(argv[1],"info")) {
+        /* $AAPL info. */
+        botHandleInfoRequest(br,argv[0]);
     } else if (argc >= 1 && !strcasecmp(argv[0],"help")) {
         /* $HELP */
         botSendMessage(br->target,
