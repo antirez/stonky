@@ -1782,7 +1782,7 @@ void botHandleInfoRequest(botRequest *br, sds symbol) {
         reply = sdscatprintf(sdsempty(),
             "Stock symbol %s not found.", symbol);
     } else {
-        unsigned int maxsum = 350;
+        unsigned int maxsum = 500;
         sds summary = yd->summary ? sdsdup(yd->summary) : sdsnew("No summary.");
         if (sdslen(summary) > maxsum) {
             sdsrange(summary,0,maxsum-1);
