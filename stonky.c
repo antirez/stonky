@@ -2895,7 +2895,7 @@ void *scanStocksThread(void *arg) {
             mcday.gain > 1 &&            /* High daily gains last month. */
             mcshort.absdiff < 8)         /* Some consistency. */
         {
-            char *listname = price < 15 ? "penny" : "tothemoon";
+            char *listname = price < 15 ? "tothemoon-penny" : "tothemoon";
             if (VerboseMode)
                 printf("%s: %d/%d %s\n",listname,j,NumSymbols,symbol);
             dbAddStockToList(listname, symbol);
@@ -2910,12 +2910,13 @@ void *scanStocksThread(void *arg) {
             mclong.gain > 2 &&              /* Quite good in the long. */
             mcshort.gain > 3 &&             /* Good in the short. */
             mcvs.gain > 4 &&                /* Outstanding in the short. */
-            mcday.gain > 1 &&               /* Doing well right now. */
-            cap > 3000000000)              /* Mid/Big cap stocks only. */
+            mcday.gain > 1)
         {
+            char *listname = cap > 3000000000 ? "evenbetter" :
+                                                "evenbetter-smallcap";
             if (VerboseMode)
-                printf("evenbetter: %d/%d %s\n",j,NumSymbols,symbol);
-            dbAddStockToList("evenbetter", symbol);
+                printf("%s: %d/%d %s\n",listname,j,NumSymbols,symbol);
+            dbAddStockToList(listname, symbol);
             showstats=1;
         } else if (
             /* New experiment about stocks that had positive results
@@ -2932,9 +2933,10 @@ void *scanStocksThread(void *arg) {
             dbAddStockToList("unstoppable", symbol);
             showstats=1;
         } else {
-            dbDelStockFromList("penny", symbol, 0);
             dbDelStockFromList("tothemoon", symbol, 0);
+            dbDelStockFromList("tothemoon-penny", symbol, 0);
             dbDelStockFromList("evenbetter", symbol, 0);
+            dbDelStockFromList("evenbetter-smallcap", symbol, 0);
             dbDelStockFromList("unstoppable", symbol, 0);
         }
 
