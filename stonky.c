@@ -2718,21 +2718,29 @@ int64_t botProcessUpdates(int64_t offset, int timeout) {
         if (update_id == NULL) continue;
         int64_t thisoff = (int64_t) update_id->valuedouble;
         if (thisoff > offset) offset = thisoff;
-        cJSON *chatid = cJSON_Select(update,".message.chat.id:n");
+
+        /* The actual message may be stored in .message or .channel_post
+         * depending on the fact this is a private or group message,
+         * or, instead, a channel post. */
+        cJSON *msg = cJSON_Select(update,".message");
+        if (!msg) msg = cJSON_Select(update,".channel_post");
+        if (!msg) continue;
+
+        cJSON *chatid = cJSON_Select(msg,".chat.id:n");
         if (chatid == NULL) continue;
         int64_t target = (int64_t) chatid->valuedouble;
-        cJSON *chattype = cJSON_Select(update,".message.chat.type:s");
+        cJSON *chattype = cJSON_Select(msg,".chat.type:s");
         if (chattype != NULL) {
             if (!strcasecmp(chattype->valuestring,"group")) {
                 botUpdateActiveChannels(target);
             }
         }
-        cJSON *date = cJSON_Select(update,".message.date:n");
+        cJSON *date = cJSON_Select(msg,".date:n");
         if (date == NULL) continue;
         time_t timestamp = date->valuedouble;
-        cJSON *text = cJSON_Select(update,".message.text:s");
+        cJSON *text = cJSON_Select(msg,".text:s");
         if (text == NULL) continue;
-        if (VerboseMode) printf(".message.text: %s\n", text->valuestring);
+        if (VerboseMode) printf(".text: %s\n", text->valuestring);
 
         /* Sanity check the request before starting the thread:
          * validate that is a request that is really targeting our bot. */
