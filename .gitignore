@@ -1,3 +1,4 @@
 stonky
 *.dSYM
 apikey.txt
+stonky.sqlite

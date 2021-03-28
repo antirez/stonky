@@ -2176,33 +2176,53 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
             }
         }
         sdsfreesplitres(stocks,numstocks);
-    } else if (!strcasecmp(argv[1],"buy") && (argc == 3 || argc == 4)) {
-        /* $list: buy SYMBOL [100@price] */
-        int64_t quantity = 1;
-        double price = 0;
-        sds symbol = argv[2];
+    } else if (!strcasecmp(argv[1],"buy") && argc >= 3) {
+        /* $list: buy SYMBOL [SYMBOL2 ...] [100@price] */
 
-        /* Check that the symbol exists. */
-        ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL,3600);
-        if (yd == NULL) {
-            reply = sdscatprintf(sdsempty(),
-                "Stock symbol %s not found.", symbol);
-            goto fmterr;
+        /* If we have the last argument that starts with a number or
+         * with '@', then it is the optional price/quantity argument. */
+        int pricearg = 0;
+        if (argc >= 4 && (argv[argc-1][0] == '@' ||
+                          isnumber(argv[argc-1][0])))
+        {
+            pricearg = argc-1;
+            argc--; /* Don't consider the last argument. */
         }
 
-        if (argc == 4)
-            parseQuantityAndPrice(argv[3],&quantity,&price,yd->reg);
-        if (price == 0) price = yd->reg;
-        freeYahooData(yd);
+        /* Buy every stock listed. */
+        for (int j = 2; j < argc; j++) {
+            sds symbol = argv[j];
+            /* Check that the symbol exists. */
+            ydata *yd = getYahooData(YDATA_QUOTE,symbol,NULL,NULL,3600);
+            if (yd == NULL) {
+                reply = sdscatprintf(sdsempty(),
+                    "Stock symbol %s not found.", symbol);
+                botSendMessage(br->target,reply,0);
+                sdsfree(reply);
+                reply = NULL;
+                continue;
+            }
 
-        /* Ready to materialize the buy operation on the DB. */
-        stockpack sp;
-        if (dbBuyStocks(listname,symbol,price,quantity,&sp) == C_ERR) {
-            reply = sdsnew("Error adding the stock pack.");
-        } else {
-            reply = sdscatprintf(sdsempty(),
-                "Now you have %d %s stocks at an average price of %.2f.",
-                (int)sp.quantity,symbol,sp.avgprice);
+            /* Parse price/quantity. */
+            int64_t quantity = 1;
+            double price = 0;
+            parseQuantityAndPrice(argv[pricearg],&quantity,&price,yd->reg);
+            if (price == 0) price = yd->reg;
+            freeYahooData(yd);
+            yd = NULL;
+
+            /* Ready to materialize the buy operation on the DB. */
+            stockpack sp;
+            if (dbBuyStocks(listname,symbol,price,quantity,&sp) == C_ERR) {
+                reply = sdsnew("Error adding the stock pack.");
+            } else {
+                reply = sdscatprintf(sdsempty(),
+                    "Now you have %d %s stocks at an average price of %.2f.",
+                    (int)sp.quantity,symbol,sp.avgprice);
+            }
+            botSendMessage(br->target,reply,0);
+            sdsfree(reply);
+            reply = NULL;
         }
     } else if (!strcasecmp(argv[1],"rm-sell") && argc == 3) {
         int64_t id = strtoll(argv[2],NULL,10);
@@ -2646,6 +2666,7 @@ void *botHandleRequest(void *arg) {
 "$mylist: buy AAPL 20     | Add 20 AAPL stocks at current price.\n"
 "$mylist: buy AAPL        | Add 1 AAPL stocks at current price.\n"
 "$mylist: buy AAPL 10000$ | Add AAPL stocks you can buy with 10k$.\n"
+"$mylist: buy V T 500$    | Add AT&T and VISA stocks for 5k$ each.\n"
 "$mylist: sell AAPL 10@35 | Sell 10 AAPL stocks at 35$ each.\n"
 "$mylist: sell AAPL 10    | Sell 10 AAPL stocks at current price.\n"
 "$mylist: sell AAPL       | Sell all AAPL stocks at current price.\n"
