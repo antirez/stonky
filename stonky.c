@@ -2183,7 +2183,7 @@ void botHandleListRequest(botRequest *br, sds *argv, int argc) {
          * with '@', then it is the optional price/quantity argument. */
         int pricearg = 0;
         if (argc >= 4 && (argv[argc-1][0] == '@' ||
-                          isnumber(argv[argc-1][0])))
+                          isdigit(argv[argc-1][0])))
         {
             pricearg = argc-1;
             argc--; /* Don't consider the last argument. */
