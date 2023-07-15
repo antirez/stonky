@@ -1103,6 +1103,8 @@ int botSendMessage(int64_t target, sds text, int64_t reply_to) {
     return res;
 }
 
+/* This structure is passed to the thread processing a given user request,
+ * it's up to the thread to free it once it is done. */
 typedef struct botRequest {
     sds request;        /* The request string. */
     int64_t target;     /* Target channel where to reply. */
