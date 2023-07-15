@@ -845,7 +845,7 @@ ydata *getYahooData(int type, const char *symbol, const char *range, const char 
                            range,interval);
     } else if (type == YDATA_QUOTE || type == YDATA_INFO) {
         url = sdsnew(apihost);
-        url = sdscat(url,"/v10/finance/quoteSummary/");
+        url = sdscat(url,"/v6/finance/quoteSummary/");
         url = sdscat(url,symbol);
         if (type == YDATA_QUOTE)
             url = sdscat(url,"?modules=price");
