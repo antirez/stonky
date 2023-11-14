@@ -491,8 +491,11 @@ int sqlGenericQuery(sqlRow *row, const char *sql, va_list ap) {
 
     for (int j = 0; j < numspec; j++) {
         switch(spec[j]) {
-        case 'b': rc = sqlite3_bind_blob64(stmt,j+1,va_arg(ap,char*),
-                                                    va_arg(ap,size_t),NULL);
+        case 'b': {
+                  char *blobptr = va_arg(ap,char*);
+                  size_t bloblen = va_arg(ap,size_t);
+                  rc = sqlite3_bind_blob64(stmt,j+1,blobptr,bloblen,NULL);
+                  }
                   break;
         case 's': rc = sqlite3_bind_text(stmt,j+1,va_arg(ap,char*),-1,NULL);
                   break;
