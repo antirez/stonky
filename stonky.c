@@ -836,7 +836,7 @@ void freeYahooData(ydata *y) {
  * for no more than the specified 'ttl'. If 'ttl' is zero, no caching is
  * used for the call. */
 ydata *getYahooData(int type, const char *symbol, const char *range, const char *interval, int ttl) {
-    const char *apihost = "https://query1.finance.yahoo.com";
+    const char *apihost = "https://query2.finance.yahoo.com";
     sds url;
 
     /* Build the query according to the requested data. */
@@ -847,14 +847,14 @@ ydata *getYahooData(int type, const char *symbol, const char *range, const char 
         url = sdscatprintf(url,"?range=%s&interval=%s&includePrePost=false",
                            range,interval);
     } else if (type == YDATA_QUOTE || type == YDATA_INFO) {
+        /* For pricing data we have to abuse the chart API, since Yahoo
+         * in late 2023 stopped providing a real time API and the
+         * quoteSummary API no logner works. Not everything is available
+         * here, but we try to do our best. */
         url = sdsnew(apihost);
-        url = sdscat(url,"/v6/finance/quoteSummary/");
+        url = sdscat(url,"/v8/finance/chart/");
         url = sdscat(url,symbol);
-        if (type == YDATA_QUOTE)
-            url = sdscat(url,"?modules=price");
-        else
-            url = sdscat(url,"?modules=assetProfile%2CdefaultKeyStatistics"
-                             "%2CcalendarEvents%2Cprice");
+        url = sdscatprintf(url,"?interval=1d");
     } else {
         return NULL;
     }
@@ -905,64 +905,32 @@ ydata *getYahooData(int type, const char *symbol, const char *range, const char 
     sdsfree(body);
 
     if (type == YDATA_QUOTE || type == YDATA_INFO) {
-        cJSON *price = cJSON_Select(json,".quoteSummary.result[0].price");
+        cJSON *meta = cJSON_Select(json,".chart.result[0].meta");
         cJSON *aux;
-        if (price == NULL) goto fmterr;
-        if ((aux = cJSON_Select(price,".preMarketPrice.raw:n")) != NULL)
-            yd->pre = aux->valuedouble;
-        if ((aux = cJSON_Select(price,".postMarketPrice.raw:n")) != NULL)
-            yd->post = aux->valuedouble;
-        if ((aux = cJSON_Select(price,".regularMarketPrice.raw:n")) != NULL)
-            yd->reg = aux->valuedouble;
-        if ((aux = cJSON_Select(price,".preMarketChangePercent.fmt:s")) != NULL)
-            yd->prechange = sdsnew(aux->valuestring);
-        if ((aux = cJSON_Select(price,".postMarketChangePercent.fmt:s")) != NULL)
-            yd->postchange = sdsnew(aux->valuestring);
-        if ((aux = cJSON_Select(price,".regularMarketChangePercent.fmt:s")) != NULL)
-            yd->regchange = sdsnew(aux->valuestring);
-        if ((aux = cJSON_Select(price,".preMarketTime:n")) != NULL)
-            yd->pretime = aux->valuedouble;
-        if ((aux = cJSON_Select(price,".postMarketTime:n")) != NULL)
-            yd->posttime = aux->valuedouble;
-        if ((aux = cJSON_Select(price,".regularMarketTime:n")) != NULL)
-            yd->regtime = aux->valuedouble;
-        if ((aux = cJSON_Select(price,".symbol:s")) != NULL)
+        if (meta == NULL) goto fmterr;
+        if ((aux = cJSON_Select(meta,".symbol:s")) != NULL)
             yd->symbol = sdsnew(aux->valuestring);
-        if ((aux = cJSON_Select(price,".shortName:s")) != NULL)
+
+        if ((aux = cJSON_Select(meta,".regularMarketPrice:n")) != NULL)
+            yd->reg = aux->valuedouble;
+        if ((aux = cJSON_Select(meta,".chartPreviousClose:n")) != NULL)
+        {
+            /* Compute the price change in percentage. */
+            double prev_close = aux->valuedouble;
+            double change = (yd->reg - prev_close) / prev_close * 100;
+            yd->regchange = sdscatprintf(sdsempty(),".%02.g%%",change);
+        }
+
+        if ((aux = cJSON_Select(meta,".symbol:s")) != NULL)
             yd->name = sdsnew(aux->valuestring);
-        if ((aux = cJSON_Select(price,".exchangeName:s")) != NULL)
+        if ((aux = cJSON_Select(meta,".exchangeName:s")) != NULL)
             yd->exchange = sdsnew(aux->valuestring);
-        if ((aux = cJSON_Select(price,".currencySymbol:s")) != NULL)
+        if ((aux = cJSON_Select(meta,".currency:s")) != NULL)
             yd->csym = sdsnew(aux->valuestring);
-        if ((aux = cJSON_Select(price,".exchangeDataDelayedBy:n")) != NULL)
-            yd->delay = aux->valuedouble;
-        if ((aux = cJSON_Select(price,".marketCap.raw:n")) != NULL)
-            yd->cap = aux->valuedouble;
+
         /* Certain times tha Yahoo API is unable to return actual info
          * from a stock, even if it returns success. */
         if (yd->regchange == NULL) goto fmterr;
-
-        /* Fill the optional stuff we'll find only if TS_INFO was
-         * requested. */
-        cJSON *ap = cJSON_Select(json,".quoteSummary.result[0].assetProfile");
-        if (ap) {
-            if ((aux = cJSON_Select(ap,".longBusinessSummary")) != NULL)
-                yd->summary = sdsnew(aux->valuestring);
-            if ((aux = cJSON_Select(ap,".country")) != NULL)
-                yd->country = sdsnew(aux->valuestring);
-            if ((aux = cJSON_Select(ap,".industry")) != NULL)
-                yd->industry = sdsnew(aux->valuestring);
-            if ((aux = cJSON_Select(ap,".fullTimeEmployees")) != NULL)
-                yd->employees = aux->valuedouble;
-        }
-
-        aux = cJSON_Select(json,
-            ".quoteSummary.result[0].defaultKeyStatistics.lastDividendValue.raw");
-        if (aux) yd->lastdiv = aux->valuedouble;
-
-        aux = cJSON_Select(json,
-            ".quoteSummary.result[0].calendarEvents.exDividendDate.fmt");
-        if (aux) yd->exdivdate = sdsnew(aux->valuestring);
     } else {
         cJSON *meta = cJSON_Select(json,".chart.result[0].meta");
         cJSON *aux;
@@ -3211,11 +3179,13 @@ void startBackgroundTasks(void) {
         exit(1);
     }
 
+#if 0
     /* Big movers periodic message. */
     if (pthread_create(&tid,NULL,bigMoversThread,NULL) != 0) {
         printf("Can't the big movers thread\n");
         exit(1);
     }
+#endif
 
     /* Fortune thread. */
     if (pthread_create(&tid,NULL,fortuneThread,NULL) != 0) {
