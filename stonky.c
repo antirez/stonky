@@ -918,7 +918,7 @@ ydata *getYahooData(int type, const char *symbol, const char *range, const char 
             /* Compute the price change in percentage. */
             double prev_close = aux->valuedouble;
             double change = (yd->reg - prev_close) / prev_close * 100;
-            yd->regchange = sdscatprintf(sdsempty(),".%02.g%%",change);
+            yd->regchange = sdscatprintf(sdsempty(),"%02.g%%",change);
         }
 
         if ((aux = cJSON_Select(meta,".symbol:s")) != NULL)
